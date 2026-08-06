@@ -1,0 +1,9 @@
+[package]
+name = "pocketvoxel-sim"
+description = "Headless Pocket Voxel host: replays .vtrace op tapes through the real core and a software rasterizer into frame hashes (goldens) and local PNGs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+pocketvoxel-core = { path = "../pocketvoxel-core" }

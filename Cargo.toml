@@ -1,0 +1,14 @@
+# The desktop-buildable workspace: the presentation core and the headless
+# sim host. The console crates stay standalone lone crates, exactly as they
+# were in the incubating repo (docs/VOXEL.md §2):
+#   crates/pocketvoxel-gu   PSP-only sceGu backend (cargo-psp toolchain)
+#   crates/pocketvoxel-psp  the EBOOT (cargo-psp; must live outside any
+#                           workspace — the hosts/psp rule)
+# vendor/ keeps the engine's own workspaces out of this one.
+[workspace]
+resolver = "2"
+members = ["crates/pocketvoxel-core", "crates/pocketvoxel-sim"]
+exclude = ["crates/pocketvoxel-gu", "crates/pocketvoxel-psp", "vendor"]
+
+[profile.release]
+opt-level = 3

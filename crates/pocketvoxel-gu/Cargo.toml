@@ -1,0 +1,20 @@
+# pocketvoxel-gu — the sceGu (PSP GE) backend for the Pocket Voxel DrawList.
+#
+# STANDALONE CRATE: excluded from the engine workspace (engine/Cargo.toml) —
+# it only compiles for mipsel-sony-psp (tier-3, cargo-psp toolchain), and
+# workspace membership would break desktop `cargo check/test`. Consumed as a
+# path dep by the pocketvoxel-psp EBOOT, exactly like pocket3d-gu is by
+# OpenStrike's.
+#
+# The `psp` revision mirrors hosts/psp/Cargo.toml and
+# tools/cli/psp-toolchain.json; no sibling checkout is part of the build.
+
+[package]
+name = "pocketvoxel-gu"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+psp = { git = "https://github.com/pocket-stack/rust-psp.git", rev = "2cbaf8c9bc72569c76240a1d9743de10731e5f6b" }
+pocketvoxel-core = { path = "../pocketvoxel-core", default-features = false, features = ["libm"] }

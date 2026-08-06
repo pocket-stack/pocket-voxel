@@ -1,0 +1,10 @@
+# cargo-psp reads this for the PBP metadata. tools/voxel.ts re-packs the
+# PARAM.SFO afterwards with MEMSIZE=1 (cargo-psp has no field for it) so
+# PPSSPP/CFW-slim grant the full 64 MB — the 21 MB pak needs it.
+[psp]
+title = "VOXELMON"
+# XMB cover art (the Psp.toml standard the pocket-<product> apps follow):
+# both images are real device captures — Pallet Town as the diorama renders
+# it on hardware, not mock-ups.
+xmb_icon_png = "assets/ICON0.png"
+xmb_background_png = "assets/PIC1.png"

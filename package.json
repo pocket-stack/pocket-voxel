@@ -1,0 +1,20 @@
+{
+  "name": "pocket-voxel",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "setup": "git submodule update --init",
+    "import": "bun tools/voxel.ts import",
+    "cook": "bun tools/voxel.ts cook",
+    "check": "bun tools/voxel.ts check",
+    "shots": "bun tools/voxel.ts shots",
+    "psp": "bun tools/voxel.ts psp --release",
+    "e2e": "bun tests/e2e/voxel-ppsspp.ts",
+    "test": "bun test tests/",
+    "tsc": "bunx tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://pocketjs.dev/schema/pocket-2.json",
+  "pocket": 2,
+  "id": "dev.pocket-stack.voxel",
+  "name": "pocket-voxel",
+  "title": "Pocket Voxel",
+  "version": "0.1.0",
+  "engine": {
+    "capabilities": {
+      "requires": ["input.buttons", "audio.pcm"],
+      "enhances": []
+    }
+  },
+  "app": {
+    "entry": "voxelmon/game/psp-main.ts",
+    "output": "game",
+    "framework": "none",
+    "viewport": { "logical": [480, 272], "presentation": "native" }
+  }
+}

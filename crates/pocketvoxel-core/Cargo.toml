@@ -1,0 +1,18 @@
+[package]
+name = "pocketvoxel-core"
+description = "Pocket Voxel presentation core: VXPK reader, retained diorama scene, orbit/battle cameras, and the per-frame draw list"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[features]
+default = ["std"]
+# f32 math from the Rust std and the VXPK builder. Without it the crate is
+# no_std + alloc: the reader, scene, cameras and draw-list builder —
+# everything the PSP consumes.
+std = []
+# Math backend for no_std targets (mutually exclusive with std in practice).
+libm = ["dep:libm"]
+
+[dependencies]
+libm = { version = "0.2", optional = true }

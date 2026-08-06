@@ -1,0 +1,6 @@
+# ROM-derived content NEVER commits (docs/VOXEL.md §1): everything the
+# importer and cooker produce lives here.
+dist/
+target/
+node_modules/
+*.log
