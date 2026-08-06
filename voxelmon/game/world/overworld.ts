@@ -19,6 +19,7 @@ import { canMove, occupied, target, type Dir, type Mover, type TilePairs } from 
 import { defPassable, GameMap, isOutside } from "./map.ts";
 import { NPC } from "./npc.ts";
 import { Player } from "./player.ts";
+import { talkScript } from "./mapscripts.ts";
 import { ScriptRunner, type ScriptWorld } from "./script.ts";
 import {
   destination,
@@ -59,6 +60,15 @@ export interface OverworldShell {
   rng: Rng;
   /** NPC wander stream, separate so ambience can't perturb encounters. */
   npcRng: Rng;
+  /** Sound.lua:190 play — the field cues the overworld itself triggers. */
+  audio: { playSfx(name: string): void };
+  /** Pokemon.lua:90 heal over the party (Commands.lua:587 heal_party). */
+  healParty(): void;
+  /** Music.lua:383 playOnce — a jingle; Music.lua:407 restoreMap after it. */
+  playOnce(song: string): void;
+  restoreMapMusic(): void;
+  /** Music.lua:339 playMap, called where the reference calls it. */
+  startMapMusic(mapId: string): void;
   showText(text: string, onDone?: () => void): void;
   showChoice(text: string, choice: (yes: boolean) => void): void;
   pushWarpFade(frames: number, midpoint: () => void, onDone?: () => void): void;
@@ -157,6 +167,12 @@ export class Overworld implements ScriptWorld {
   warpEntryCell?: { x: number; y: number };
   transitioning = false;
   private doorWarp = false;
+  /** OverworldController.lua:1221 — 16 ticks between wall-bonk cues. */
+  private bumpCooldown = 0;
+  /** A play_once jingle is in flight (Music.lua:389 pendingRestore). */
+  private oneShotPending = false;
+  /** OverworldController.lua:1455 — the map whose theme the seam step owes. */
+  pendingSeamMusic: string | null = null;
   private joyLatch?: { a?: boolean };
   private npcPool = new Map<string, NPC>();
   readonly tilePairs: TilePairs;
@@ -206,6 +222,10 @@ export class Overworld implements ScriptWorld {
   ): void {
     const def = this.shell.data.maps?.[mapId];
     if (!def) throw new Error(`unknown map ${mapId}`);
+    // crossConnection re-arms this right after; clearing here is what keeps a
+    // warp or a reload from leaving a stale deferred PlayMapMusic pending
+    // (OverworldController.lua:437-439).
+    this.pendingSeamMusic = null;
     const tileset = this.shell.data.tilesets?.[def.tileset];
     if (!tileset) throw new Error(`unknown tileset ${def.tileset} for ${mapId}`);
     this.map = new GameMap(def, tileset);
@@ -259,6 +279,7 @@ export class Overworld implements ScriptWorld {
 
   // OverworldController.lua:883 update
   update(): void {
+    if (this.bumpCooldown > 0) this.bumpCooldown -= 1;
     this.runner.update();
     // the emotion-bubble pause holds the world for a beat
     // (OverworldController.lua:1018); only the player animates through it
@@ -290,6 +311,14 @@ export class Overworld implements ScriptWorld {
     const entry = this.warpEntryCell;
     if (entry && (this.player.cellX !== entry.x || this.player.cellY !== entry.y)) {
       this.warpEntryCell = undefined;
+    }
+    // OverworldController.lua:1075 — the seam step landed, so the deferred
+    // PlayMapMusic runs now (and only if we are still on the map it was
+    // armed for; a warp taken mid-step drops it).
+    if (stepped && this.pendingSeamMusic) {
+      const pending = this.pendingSeamMusic;
+      this.pendingSeamMusic = null;
+      if (pending === this.map.id) this.shell.startMapMusic(pending);
     }
     if (stepped && !scripted) {
       this.onStepComplete();
@@ -367,7 +396,12 @@ export class Overworld implements ScriptWorld {
         if (w && this.map.isWarpTileCell(tx, ty) && !this.isCooked(w.def.destMap)) {
           this.player.facing = dir;
           this.player.bumpFrames = this.player.stepFrames;
-          continue;
+          // ENDS the poll, like every other outcome here (:1224 returns the
+          // tryMove result): a poll handles ONE held direction, so a held
+          // diagonal must not walk on the other axis, and falling through to
+          // the turn re-arm below would hand back a turn window the original
+          // never grants while a direction is down.
+          return;
         }
       }
       const result = this.player.tryMove(dir, this.map, this.entities, this.tilePairs);
@@ -378,7 +412,19 @@ export class Overworld implements ScriptWorld {
         const w = onCollision(this.map, this.carpets, this.player.cellX, this.player.cellY, dir);
         if (w) {
           this.takeWarp(w.def);
+          return;
         }
+      }
+      // OverworldController.lua:1218-1223: the bonk. Bumping another entity
+      // is silent, and the 16-frame cooldown is what keeps a held direction
+      // into a wall from machine-gunning the cue.
+      if (
+        result === "blocked" &&
+        this.player.lastBlockReason !== "entity" &&
+        this.bumpCooldown <= 0
+      ) {
+        this.shell.audio.playSfx("Collision");
+        this.bumpCooldown = 16;
       }
       return;
     }
@@ -416,12 +462,14 @@ export class Overworld implements ScriptWorld {
           if (!landing) return false;
           const { dest, ts, x, y } = landing;
           if (!defPassable(dest, ts, x, y, p.surfing)) return false;
+          this.shell.audio.playSfx("Ledge"); // OverworldController.lua:1352
           p.hopFrames = 32;
           p.hopTotal = 32;
           this.scriptMove(p, dir, 1, () => this.checkEdgeExit(dir));
           return true;
         }
         if (!occupied(this.entities, lx, ly, p) && this.map.isWalkableCell(lx, ly)) {
+          this.shell.audio.playSfx("Ledge"); // OverworldController.lua:1359
           p.hopFrames = 32; // jump arc (cosmetic; entities can't collide mid-hop
           p.hopTotal = 32; // because the hop is a scripted move that owns input)
           this.scriptMove(p, dir, 2);
@@ -521,6 +569,10 @@ export class Overworld implements ScriptWorld {
     // fresh walk-cycle clock so the seam step always shows leg frames
     p.animClock = 0;
     p.stepFramesCur = p.stepFrames;
+    // OverworldController.lua:1455 — the new map's theme is DEFERRED to the
+    // frame the seam step lands (issue #93). Starting it here would swap the
+    // song while the player is still visibly on the old map's last cell.
+    this.pendingSeamMusic = dest.id;
     // FixedStep:discardCatchup (OverworldController.lua:1477) is a no-op
     // here: the voxel host runs exactly one tick per frame, so there is no
     // catch-up accumulator to discard.
@@ -552,10 +604,9 @@ export class Overworld implements ScriptWorld {
     }
   }
 
-  // OverworldController.lua:2520 talkTo — the slice keeps the plain-text
-  // path: freeze, face the player, resolve the object's TEXT_* constant.
-  // Item balls, static encounters, trainer engagement and TX_SCRIPT marts/
-  // nurses are the battle/menu ports' seams.
+  // OverworldController.lua:2520 talkTo — freeze, then dispatch the object's
+  // TEXT_* constant. Item balls, static encounters, trainer engagement and
+  // TX_SCRIPT marts/nurses are the battle/menu ports' seams.
   talkTo(npc: NPC): void {
     npc.frozen = true;
     const unfreeze = () => {
@@ -564,9 +615,31 @@ export class Overworld implements ScriptWorld {
     this.showMapText(npc.def.text, npc, unfreeze);
   }
 
-  // OverworldController.lua:3241 showMapText — dispatch a TEXT_* constant
-  // through extracted text (hand-ported scripts are outside the slice).
+  // OverworldController.lua:3241 showMapText — a TEXT_* constant goes to the
+  // map's hand-ported script if it has one (MapScripts.lua:239 talkScript),
+  // and to the plain extracted line otherwise. The scripted path is what
+  // makes a text_asm branch branch: the extracted text of one of those
+  // pointers is only ever its FIRST case, so without the script Mom reads the
+  // wake-up line forever and Oak never stops warning you about the grass.
   showMapText(textConst: string, npc?: NPC, onDone?: () => void): void {
+    const script = talkScript(this.map.id, textConst);
+    if (script && !this.runner.isRunning()) {
+      if (npc) npc.frozen = true;
+      this.runner.run(script, {
+        npc,
+        onDone: () => {
+          if (this.oneShotPending) {
+            // Music.lua:403 oneShotPlaying holds the script until the jingle
+            // ends and Music.update restores the theme; this surface cannot
+            // ask, so the theme comes back when the script does.
+            this.oneShotPending = false;
+            this.shell.restoreMapMusic();
+          }
+          onDone?.();
+        },
+      });
+      return;
+    }
     const text = this.resolveText(textConst);
     if (text !== null) {
       if (npc) npc.facePlayer(this.player);
@@ -574,6 +647,34 @@ export class Overworld implements ScriptWorld {
     } else {
       onDone?.();
     }
+  }
+
+  // ScriptWorld (script.ts) — the services a command reaches -------------
+
+  /** Commands.lua:587 heal_party. */
+  healParty(): void {
+    this.shell.healParty();
+  }
+
+  /** Commands.lua:533 play_once — see showMapText's restore note. */
+  playOnce(songId: string, onDone: () => void): void {
+    this.oneShotPending = true;
+    this.shell.playOnce(songId);
+    onDone();
+  }
+
+  /**
+   * Commands.lua:1216 fade — the overlay ramps to the colour and back. The
+   * voxel surface has no overlay op, so the port spends the ramp's frames the
+   * way it spends every other fade's (game.ts WarpFadeState holds the world).
+   */
+  fade(_dir: "in" | "out", frames: number, onDone: () => void): void {
+    this.shell.pushWarpFade(frames, () => {}, onDone);
+  }
+
+  /** Commands.lua:162 face_player. */
+  facePlayer(npc: NPC): void {
+    npc.facePlayer(this.player);
   }
 
   // src/core/Data.lua:304 resolveText — map label + TEXT_* const through
@@ -697,7 +798,13 @@ export class Overworld implements ScriptWorld {
   startWarpTo(mapId: string, x: number, y: number, facing?: Dir, onDone?: () => void): void {
     if (!this.isCooked(mapId)) {
       // The door is locked: a warp into a map the pak has no geometry for
-      // would land the player in an invisible world.
+      // would land the player in an invisible world. The warp never happens,
+      // so nothing it staged may survive it — a doorWarp left armed here
+      // would spend itself on the NEXT warp, walking the player out of a
+      // door they did not enter — and a parked script must be resumed or the
+      // runner never wakes (ScriptRunner.lua:197 resume).
+      this.doorWarp = false;
+      onDone?.();
       return;
     }
     // ANY transition off an outdoor map remembers the outdoor side, so
@@ -718,6 +825,12 @@ export class Overworld implements ScriptWorld {
         // touched here: the flag the departing tile set rides through the
         // warp (issue #378).
         this.warpEntryCell = { x, y };
+        if (doorWarp) {
+          // OverworldController.lua:4053: the cue is chosen by where you
+          // LANDED, and it plays for every door warp — the door-tile test
+          // below only gates the walk-out step.
+          this.shell.audio.playSfx(isOutside(this.map.def) ? "Go_Outside" : "Go_Inside");
+        }
         if (doorWarp && this.map.isDoorTileCell(this.player.cellX, this.player.cellY)) {
           // PlayerStepOutFromDoor: any warp landing on a door tile
           // auto-steps south once. The walk-out is a simulated d-pad press,

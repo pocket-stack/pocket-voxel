@@ -176,23 +176,52 @@ export function inflictStatus(
 }
 
 // ---------------------------------------------------------------------------
-// The ported handler subset. Reachable moves (dist/voxelmon/gen movesets,
-// Route 1/2/22 wilds L2-5 + starters L2-8, listed in the battle port report):
+// The ported handler subset. The census is over the COOKED map set
+// (cook/cli.ts DEFAULT_MAPS): gen/encounters.json puts PIDGEY, RATTATA and
+// WEEDLE at L2-5 in the ROUTE_1 and ROUTE_2 grass, and the player's own line
+// reaches L20-ish by grinding there (evolutions included, since a level
+// evolution now lands — rules/evolution.ts).
 //   GUST/TACKLE/QUICK_ATTACK/HORN_ATTACK/SCRATCH/PECK -> NO_ADDITIONAL_EFFECT
 //   GROWL  -> ATTACK_DOWN1_EFFECT      TAIL_WHIP/LEER -> DEFENSE_DOWN1_EFFECT
 //   SAND_ATTACK -> ACCURACY_DOWN1_EFFECT
+//   STRING_SHOT (WEEDLE L1)  -> SPEED_DOWN1_EFFECT
+//   POISON_STING (WEEDLE L1) -> POISON_SIDE_EFFECT1
+//   HARDEN (KAKUNA/METAPOD L1) -> DEFENSE_UP1_EFFECT
+//   HYPER_FANG (RATTATA L14) -> FLINCH_SIDE_EFFECT1
+//   FURY_ATTACK (SPEAROW L?, BEEDRILL L?) -> TWO_TO_FIVE_ATTACKS_EFFECT
+//   FOCUS_ENERGY (BEEDRILL L16) -> FOCUS_ENERGY_EFFECT
 //   LEECH_SEED (BULBASAUR L7) -> LEECH_SEED_EFFECT
 //   BUBBLE (SQUIRTLE L8) -> SPEED_DOWN_SIDE_EFFECT
 //   EMBER (CHARMANDER L9, one level past the window but one level-up away)
 //          -> BURN_SIDE_EFFECT1
 //   STRUGGLE (the no-PP fallback) -> RECOIL_EFFECT
+// Reachable but still NOT registered, both needing plumbing this slice does
+// not have: TWINEEDLE_EFFECT (BEEDRILL L20 — MoveEffects.lua registers it in
+// both `full` and `secondary`, and the second hit's poison reroute wants the
+// per-hit seam) and SWITCH_AND_TELEPORT_EFFECT (PIDGEY L19 WHIRLWIND —
+// effects.asm:810 ends the wild battle, which is a battle-exit path).
 // Everything else: NOT REGISTERED — degrades via the reference's own
 // unknown-effect fallbacks (see module header).
 // ---------------------------------------------------------------------------
 
+function statUp(stat: StageStat, delta: number): EffectRecord["run"] {
+  // MoveEffects.lua:74-78 statUp — the USER's stage, and no MIST guard
+  return (ctx) => ctx.changeStage(ctx.user, stat, delta, false);
+}
+
 function statDown(stat: StageStat, delta: number): EffectRecord["run"] {
   // MoveEffects.lua:80-84 statDown
   return (ctx) => ctx.changeStage(ctx.target, stat, -delta, true);
+}
+
+function flinchSide(chance: number): EffectRecord["run"] {
+  // MoveEffects.lua:140-149 flinchSide — substitute blocks it, then
+  // rand(0..255) < chance; the flinch itself prints nothing
+  return (ctx) => {
+    if (ctx.target.substituteHP !== undefined) return [];
+    if (ctx.battle.rng.byte() < chance) ctx.target.flinched = true;
+    return [];
+  };
 }
 
 function statDownSide(stat: StageStat): EffectRecord["run"] {
@@ -230,6 +259,21 @@ export const EFFECTS: Record<string, EffectRecord> = {
   ATTACK_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("attack", 1) },
   DEFENSE_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("defense", 1) },
   ACCURACY_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("accuracy", 1) },
+  SPEED_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("speed", 1) },
+
+  // MoveEffects.lua:166-173 via statUp — the user's own stage, so no
+  // accuracy roll (ACC_CHECKED lists only the stat-DOWN moves)
+  DEFENSE_UP1_EFFECT: { kind: "primary", run: statUp("defense", 1) },
+
+  // MoveEffects.lua:235-239 — a second FOCUS ENERGY fails outright
+  FOCUS_ENERGY_EFFECT: {
+    kind: "primary",
+    run: (ctx) => {
+      if (ctx.user.focusEnergy) return ["But, it failed!"];
+      ctx.user.focusEnergy = true;
+      return [`${displayName(ctx.user)}'s\ngetting pumped!`];
+    },
+  },
 
   // MoveEffects.lua:189-199 — leech_seed.asm has no substitute check;
   // fails on an already-seeded or GRASS-type target
@@ -249,6 +293,22 @@ export const EFFECTS: Record<string, EffectRecord> = {
   // MoveEffects.lua:376 (statDownSide) / :365 (statusSide BRN 26)
   SPEED_DOWN_SIDE_EFFECT: { kind: "secondary", run: statDownSide("speed") },
   BURN_SIDE_EFFECT1: { kind: "secondary", run: statusSide("BRN", 26) },
+  // MoveEffects.lua:370 statusSide PSN 52 / :372 flinchSide 26
+  POISON_SIDE_EFFECT1: { kind: "secondary", run: statusSide("PSN", 52) },
+  FLINCH_SIDE_EFFECT1: { kind: "secondary", run: flinchSide(26) },
+
+  // MoveEffects.lua:482-486 — hitsFrom(:438) draws rand(0..len-1) over the
+  // 2/2/2/3/3/3/4/5 table when the move carries no multiHit of its own
+  TWO_TO_FIVE_ATTACKS_EFFECT: {
+    kind: "full",
+    hitCount: (ctx) => {
+      const dist = (ctx.move as MoveDef & { multiHit?: number | number[] }).multiHit ?? [
+        2, 2, 2, 3, 3, 3, 4, 5,
+      ];
+      if (typeof dist === "number") return dist;
+      return dist[randRange(ctx.rng, 0, dist.length - 1)]!;
+    },
+  },
 
   // MoveEffects.lua:530-539 RECOIL_EFFECT — recoil.asm reads the RAW
   // computed wDamage, div 2 for Struggle, div 4 otherwise

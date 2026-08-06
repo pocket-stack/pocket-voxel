@@ -12,7 +12,7 @@
 
 import { fromSection, type AudioBanks } from "./audio/banks.ts";
 import { AudioDirector } from "./audio/music.ts";
-import { WildBattle, type BattleResult } from "./battle/battle.ts";
+import { WildBattle } from "./battle/battle.ts";
 import { healMon, newMon, type PartyMon } from "./battle/mon.ts";
 import { computeStaging, type BattleStaging } from "./battle/staging.ts";
 import { BattleUi } from "./battle/ui.ts";
@@ -20,7 +20,9 @@ import type { VoxelmonData } from "./data.ts";
 import type { VoxelHost } from "./host.ts";
 import { Input } from "./input.ts";
 import { seededRng, type Rng } from "./rng.ts";
-import { POST_BATTLE_RETURN } from "./rules/timing.ts";
+import { apply as applyEvolution, checkParty } from "./rules/evolution.ts";
+import { movesLearnedAt } from "./rules/experience.ts";
+import { MAP_ENTRY_AFTER_BATTLE, POST_BATTLE_RETURN, YES_NO_ANSWER } from "./rules/timing.ts";
 import {
   Scene,
   type BattleSceneView,
@@ -100,27 +102,50 @@ class TextBoxState implements GameState, UiBoxSource {
 
 class ChoiceState implements GameState, ChoiceSource {
   readonly kind = "choice";
-  yes = true;
+  yes: boolean;
+  /** The answer given, held on screen before it is handed back. */
+  private pending: boolean | null = null;
+  private holdFrames = 0;
   constructor(
     private game: VoxelmonGame,
     private cb: (yes: boolean) => void,
-  ) {}
+    opts?: { defaultNo?: boolean; noSound?: boolean },
+  ) {
+    // ChoiceBox.lua:16 — some of the original's prompts open on NO
+    this.yes = !opts?.defaultNo;
+    this.noSound = opts?.noSound === true;
+  }
+  private readonly noSound: boolean;
   update(): void {
     const input = this.game.input;
+    // ChoiceBox.lua:34-45: BOTH branches of DisplayTwoOptionMenu hold 15
+    // frames with the menu still up before TwoOptionMenu_RestoreScreenTiles
+    // hands control back (engine/menus/text_box.asm:322-323, :333-334).
+    if (this.pending !== null) {
+      this.holdFrames -= 1;
+      if (this.holdFrames <= 0) {
+        const yes = this.pending;
+        this.pending = null;
+        this.game.pop(); // this choice
+        this.game.pop(); // the text box under it (ChoiceBox pops both)
+        this.cb(yes);
+      }
+      return;
+    }
     if (input.wasPressed("up") || input.wasPressed("down")) {
       this.yes = !this.yes;
-    }
-    if (input.wasPressed("a")) {
-      this.game.audio.playSfx("Press_AB"); // ChoiceBox.lua:53
-      this.game.pop(); // this choice
-      this.game.pop(); // the text box under it (ChoiceBox pops both)
-      this.cb(this.yes);
+    } else if (input.wasPressed("a")) {
+      // HandleMenuInput_ (home/window.asm): SFX_PRESS_AB on A and B alike
+      if (!this.noSound) this.game.audio.playSfx("Press_AB"); // ChoiceBox.lua:53
+      this.pending = this.yes;
+      this.holdFrames = YES_NO_ANSWER;
     } else if (input.wasPressed("b")) {
-      // B answers NO (pokered HandleYesNoMenu's B path)
-      this.game.audio.playSfx("Press_AB"); // ChoiceBox.lua:59
-      this.game.pop();
-      this.game.pop();
-      this.cb(false);
+      if (!this.noSound) this.game.audio.playSfx("Press_AB"); // ChoiceBox.lua:59
+      // .choseSecondMenuItem writes wCurrentMenuItem = 1 BEFORE the hold, so
+      // the cursor visibly snaps to NO for those 15 frames
+      this.yes = false;
+      this.pending = false;
+      this.holdFrames = YES_NO_ANSWER;
     }
   }
 }
@@ -156,7 +181,6 @@ class BattleGameState implements GameState, BattleSceneView {
   readonly battle: WildBattle;
   readonly staging: BattleStaging | null;
   readonly ui = new BattleUi();
-  private postFrames = -1;
 
   constructor(
     private game: VoxelmonGame,
@@ -174,15 +198,21 @@ class BattleGameState implements GameState, BattleSceneView {
   update(): void {
     const b = this.battle;
     if (b.finished) {
-      // POST_BATTLE_RETURN (home/overworld.asm:351-352): the hold before
-      // EnterMap hands the map back; then pop to the overworld exactly
-      // where the player stood
-      if (this.postFrames < 0) this.postFrames = POST_BATTLE_RETURN;
-      this.postFrames -= 1;
-      if (this.postFrames <= 0) {
-        this.game.pop();
-        if (b.finished === "lose") this.game.blackout();
-      }
+      // BattleState.lua:4647-4653 — teardown pops the battle screen FIRST,
+      // and it is the map that holds: POST_BATTLE_RETURN before EnterMap
+      // (home/overworld.asm:351-352) and then MapEntryAfterBattle's
+      // GBFadeInFromWhite (:22, :749-753). The port renders both as held
+      // frames, the convention WarpFadeState already uses for the warp fade.
+      this.game.pop();
+      // OverworldController.lua:3851-3894 afterBattle: the blackout warps to
+      // the heal point FIRST and takes evolutions() as its callback (:3882),
+      // every other exit runs them straight away (:3892).
+      if (b.finished === "lose") this.game.blackout();
+      this.game.pushWarpFade(
+        POST_BATTLE_RETURN + MAP_ENTRY_AFTER_BATTLE,
+        () => {},
+        () => this.game.runEvolutions(b.leveledUp),
+      );
       return;
     }
     b.update(this.game.input);
@@ -219,7 +249,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   // themselves; the port watches the same state transitions from one place)
   private audioMap: string | null = null;
   private audioBattle = false;
-  private audioResult: BattleResult | null = null;
+  private audioRestored = false;
 
   constructor(data: VoxelmonData, host: VoxelHost, seed = 1) {
     this.data = data;
@@ -269,28 +299,51 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     if (bv) {
       if (!this.audioBattle) {
         this.audioBattle = true;
-        this.audioResult = null;
+        // play_battle_music.asm runs before the transition (:1458); the cry
+        // and the victory theme are NOT observed from out here — the battle
+        // queues them where the reference does and we drain them below.
         this.audio.playBattle("wild");
-        this.audio.playCry(bv.battle.enemy.mon.species);
-      } else if (bv.battle.result && bv.battle.result !== this.audioResult) {
-        this.audioResult = bv.battle.result;
-        // Music.playVictory only has a jingle for a won fight; a run or a
-        // catch keeps the battle theme until the state pops.
-        if (bv.battle.result === "win") this.audio.playVictory("wild");
       }
+      this.drainBattleCues(bv.battle);
       return;
     }
     if (this.audioBattle) {
       this.audioBattle = false;
-      this.audioResult = null;
-      this.audio.restore();
+      // the battle's own finish() already queued music:restore; this is the
+      // backstop for a battle torn down without one
+      if (!this.audioRestored) this.audio.restore();
+      this.audioRestored = false;
       return;
     }
     const mapId = this.overworld.map.id;
-    if (mapId !== this.audioMap) {
+    // A connection crossing switches the map at the START of the seam step;
+    // its theme is owed to the frame the step LANDS (OverworldController.lua:
+    // 1075), and the overworld pays it through startMapMusic. Observing the
+    // map id here would jump the gun by a whole step.
+    if (mapId !== this.audioMap && !this.overworld.pendingSeamMusic) {
       this.audioMap = mapId;
       this.audio.startMap(mapId);
     }
+  }
+
+  /** Play what the battle queued, in the order it queued it. */
+  private drainBattleCues(battle: WildBattle): void {
+    const cues = battle.audioCues;
+    for (const cue of cues) {
+      if (cue.startsWith("cry:")) {
+        this.audio.playCry(cue.slice(4));
+      } else if (cue.startsWith("sfx:")) {
+        this.audio.playSfx(cue.slice(4));
+      } else if (cue === "music:victory") {
+        // Music.playVictory only has a jingle for a won fight
+        this.audio.playVictory("wild");
+      } else if (cue === "music:restore") {
+        this.audio.restore();
+        this.audioRestored = true;
+        this.audioMap = this.overworld.map.id;
+      }
+    }
+    cues.length = 0;
   }
 
   /**
@@ -304,7 +357,12 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    */
   newGame(): void {
     this.save = {
-      flags: {},
+      // The starter is already in the party below, so the world must read
+      // as it does AFTER Oak's lab: every hand-ported script branches on
+      // this flag (data/scripts/reds_house.lua, pallet_town.lua), and with
+      // it clear Mom would offer the wake-up line to a trainer who already
+      // has a mon and Oak would still be barring the grass.
+      flags: { EVENT_GOT_STARTER: true },
       inventory: {},
       player: { name: "RED", rival: "BLUE" },
       lastHeal: { map: "PALLET_TOWN", x: 5, y: 6 },
@@ -385,6 +443,26 @@ export class VoxelmonGame implements OverworldShell, SceneView {
 
   // OverworldShell ------------------------------------------------------
 
+  /** Commands.lua:587 heal_party — Pokemon.lua:90 heal over the party. */
+  healParty(): void {
+    for (const mon of this.save.party) healMon(this.data, mon);
+  }
+
+  /** Music.lua:383 playOnce / :407 restoreMap, for the script verbs. */
+  playOnce(song: string): void {
+    this.audio.playOnce(song);
+  }
+
+  restoreMapMusic(): void {
+    this.audio.restore();
+  }
+
+  /** Music.lua:339 playMap, from the site that owns the moment. */
+  startMapMusic(mapId: string): void {
+    this.audioMap = mapId;
+    this.audio.startMap(mapId);
+  }
+
   showText(text: string, onDone?: () => void): void {
     this.push(new TextBoxState(this, text, onDone));
   }
@@ -395,6 +473,68 @@ export class VoxelmonGame implements OverworldShell, SceneView {
 
   pushWarpFade(frames: number, midpoint: () => void, onDone?: () => void): void {
     this.push(new WarpFadeState(this, frames, midpoint, onDone));
+  }
+
+  /**
+   * Evolution.lua:195-223 checkParty driving :156-178 evolve, one mon at a
+   * time in party order. The Lua plays EvolutionState's flashing-forms movie
+   * when it has graphics and falls back to the plain text flow otherwise;
+   * this slice takes the fallback — the same two pages, the same apply, and
+   * the evolved species' exact-level learn check afterwards (:174, the
+   * evos_moves.asm EvolveMon -> LearnMoveFromLevelUp predef).
+   */
+  runEvolutions(leveledUp: ReadonlySet<PartyMon> | null | undefined): void {
+    const pending = checkParty(this.data, this.save.party, leveledUp);
+    if (pending.length === 0) return;
+    const step = (i: number): void => {
+      const row = pending[i];
+      if (!row) return;
+      const { mon, to } = row;
+      const oldName = mon.nickname ?? this.data.pokemon[mon.species]!.name;
+      const newName = this.data.pokemon[to]!.name;
+      applyEvolution(this.data, mon, to);
+      this.showText(
+        `What?\n${oldName} is\nevolving!\fCongratulations!\nYour ${oldName}\nevolved into\n${newName}!`,
+        () => {
+          this.learnEvolutionMoves(mon, () => step(i + 1));
+        },
+      );
+    };
+    step(0);
+  }
+
+  /**
+   * Evolution.lua:112-152 learnEvolutionMoves — the EVOLVED species' learnset
+   * at exactly this level (movesLearnedAt, not movesAtLevel), each new move
+   * announced on its own page. A full moveset keeps battle.ts's v1 deviation:
+   * MoveLearnMenu is not in this slice, so the mon declines and says so.
+   */
+  private learnEvolutionMoves(mon: PartyMon, onDone: () => void): void {
+    const def = this.data.pokemon[mon.species]!;
+    const learned = movesLearnedAt(def, mon.level);
+    const name = mon.nickname ?? def.name;
+    const step = (i: number): void => {
+      const moveId = learned[i];
+      if (!moveId) {
+        onDone();
+        return;
+      }
+      const mdef = this.data.moves[moveId];
+      if (!mdef || mon.moves.some((mv) => mv.id === moveId)) {
+        step(i + 1);
+        return;
+      }
+      if (mon.moves.length < 4) {
+        mon.moves.push({ id: moveId, pp: mdef.pp });
+        this.showText(`${name} learned\n${mdef.name}!`, () => step(i + 1));
+        return;
+      }
+      this.showText(
+        `${name} is trying to\nlearn ${mdef.name}!\f${name} did not learn\n${mdef.name}!`,
+        () => step(i + 1),
+      );
+    };
+    step(0);
   }
 
   // OverworldShell keeps the seam's method name (overworld.ts is another
