@@ -105,7 +105,7 @@ identity anchor, the fetch-bound GE findings, and the determinism ceremony
 that governs when a committed hash may ever be re-based. The engine arrives
 as a pinned git submodule (`vendor/pocketjs`), the OpenStrike pattern: the
 PSP host library, the audio module and the toolchain pins all come from one
-engine commit.
+engine commit — a mainline commit, moved forward deliberately.
 
 ## License
 
