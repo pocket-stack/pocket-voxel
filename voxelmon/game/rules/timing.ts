@@ -30,6 +30,11 @@ export const WARP_FADE_IN = 0;
 // home/overworld.asm:351-352 — after a battle, before EnterMap
 export const POST_BATTLE_RETURN = 10;
 
+// home/overworld.asm:22 + :749-753 — EnterMap sees BIT_BATTLE_OVER_OR_BLACKOUT
+// and runs MapEntryAfterBattle, which is GBFadeInFromWhite. Every battle
+// leaves through it (BattleState.lua:4652).
+export const MAP_ENTRY_AFTER_BATTLE = FADE_IN_FROM_WHITE;
+
 // engine/overworld/player_animations.asm:5-7 — EnterMapAnim, the fly /
 // teleport / dungeon-warp arrival: Delay3 then GBFadeInFromWhite
 export const SPECIAL_WARP_ENTRY = DELAY3 + FADE_IN_FROM_WHITE;

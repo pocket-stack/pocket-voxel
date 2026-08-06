@@ -4,11 +4,12 @@
 // evolutions on item use, trade evolutions when a link trade completes.
 //
 // Ported: METHODS, pendingFor, pendingLevelEvo, apply (the stat/HP-delta/dex
-// mutation). Not ported (UI/flow, per the check-logic-only scope): evolve,
-// learnEvolutionMoves, request, checkParty, the Runtime hooks and the
-// registry seam. The learn-on-evolve rule those flows call lives in
-// experience.ts movesLearnedAt (entry.level == level exactly — a mon
-// evolving at a learnset level gains that move, one level later does not).
+// mutation) and checkParty's QUEUE — the after-battle hook's decision, kept
+// pure so the caller owns the pages (game.ts runs them, since the Lua's
+// evolve() is a Screens push). Not ported: request, the Runtime hooks and the
+// registry seam. The learn-on-evolve rule lives in experience.ts
+// movesLearnedAt (entry.level == level exactly — a mon evolving at a learnset
+// level gains that move, one level later does not).
 
 import type { EvolutionEntry, SpeciesDef, VoxelmonData } from "../data.ts";
 import { calc, type DVs, type StatExp } from "./stats.ts";
@@ -91,6 +92,29 @@ export function pendingLevelEvo(data: VoxelmonData, mon: EvoMon): string | null 
 export interface Pokedex {
   seen: Record<string, boolean>;
   owned: Record<string, boolean>;
+}
+
+/**
+ * Evolution.lua:195-223 checkParty — the after-battle hook, decision half:
+ * party order, and ONLY mons that gained a level in the battle that just
+ * ended (Gen 1's EvolveAfterBattle; a mon that qualified earlier and did not
+ * level this time waits for its next level-up). The Lua queues these one at a
+ * time through the evolve movie; here the caller drives the pages, so this
+ * returns the queue and mutates nothing.
+ */
+export function checkParty<T extends EvoMon>(
+  data: VoxelmonData,
+  party: readonly T[],
+  leveledUp: ReadonlySet<T> | null | undefined,
+): { mon: T; to: string; evo: EvolutionEntry }[] {
+  const pending: { mon: T; to: string; evo: EvolutionEntry }[] = [];
+  if (!leveledUp) return pending;
+  for (const mon of party) {
+    if (!leveledUp.has(mon)) continue;
+    const hit = pendingFor(data, mon, { kind: "levelup" });
+    if (hit) pending.push({ mon, to: hit[0], evo: hit[1] });
+  }
+  return pending;
 }
 
 /**

@@ -38,6 +38,7 @@ import {
   MAX_COLS,
   SPACE,
   TEXT_X,
+  toCells,
 } from "./ui/tiles.ts";
 
 // gen1recomp src/render/SpriteRenderer.lua:85 — the walk-sheet frame order
@@ -410,9 +411,16 @@ export class Scene {
     }
   }
 
+  /** Static label into the retained grid, glyph by glyph (tile id == code). */
+  private stamp(host: VoxelHost, x: number, y: number, s: string): void {
+    const codes = encodeGlyphs(s);
+    for (let i = 0; i < codes.length; i++) host.uiTile(x + i, y, codes[i]!);
+  }
+
   // ui — the dialogue box as a retained tile-layer program: border once on
-  // open, uiText per line begin, uiReveal as the typewriter advances (the
-  // reveal counter applies to the LAST uiText — voxel-spec).
+  // open, uiText for the row that is typing, uiReveal as the typewriter
+  // advances (the reveal counter applies to the LAST uiText — voxel-spec),
+  // and every finished row stamped into the grid.
   private emitUi(view: SceneView): void {
     const host = this.host;
     const owner = view.uiBox();
@@ -453,28 +461,40 @@ export class Scene {
       this.uiRows = [];
       this.uiPage = box.pageIndex;
     }
-    // rows: shown[0] at LINE1_Y, shown[1] at LINE2_Y (TextBox.lua:370)
+    // rows: shown[0] at LINE1_Y, shown[1] at LINE2_Y. TextBox.lua:370 draws
+    // EVERY retained line every frame, but `uiText` is the ONE live
+    // typewriter run and the core keeps only the last (voxel-spec §ui), so a
+    // finished row has to be stamped into the retained tile grid or it
+    // disappears the moment the next line begins typing. Glyph codes ARE ui
+    // tile ids under the GB convention, so the stamp is the encode.
     for (let i = 0; i < box.shown.length; i++) {
       const line = box.shown[i]!;
       const isLast = i === box.shown.length - 1;
+      const y = i === 0 ? LINE1_Y : LINE2_Y;
       const cached = this.uiRows[i];
-      // Identity hit: same ShownLine in the same role builds the same text
-      // by construction, so the pad rebuild + glyph encode + full-string
-      // compare (once EVERY tick a box was open) all skip.
+      // Identity hit: same ShownLine in the same role emits the same ops by
+      // construction, so the encode + full-string compare (once EVERY tick a
+      // box was open) both skip.
       if (cached && cached.line === line && cached.wasLast === isLast) {
         continue;
       }
-      // Only non-last rows need the pad (a scroll must clear the glyphs
-      // beneath); the typing row skips the encode entirely.
-      const text = isLast
-        ? line.text
-        : line.text + " ".repeat(Math.max(0, MAX_COLS - encodeGlyphs(line.text).length));
+      if (!isLast) {
+        const codes = encodeGlyphs(line.text);
+        for (let c = 0; c < codes.length; c++) host.uiTile(TEXT_X + c, y, codes[c]!);
+        // a scroll must clear whatever the row above used to carry
+        if (codes.length < MAX_COLS) {
+          host.uiFill(TEXT_X + codes.length, y, MAX_COLS - codes.length, 1, SPACE);
+        }
+        this.uiRows[i] = { line, wasLast: isLast, text: line.text, revealed: -1 };
+        continue;
+      }
+      const text = toCells(line.text);
       if (!cached || cached.text !== text) {
-        host.uiText(TEXT_X, i === 0 ? LINE1_Y : LINE2_Y, text);
+        host.uiText(TEXT_X, y, text);
         this.uiRows[i] = { line, wasLast: isLast, text, revealed: -1 };
         textsEmitted = true;
       } else {
-        // Same text as the row already stamped (a scrolled-in twin): the op
+        // Same text as the row already typing (a scrolled-in twin): the op
         // stream stays silent exactly as before — only the identity re-pins.
         cached.line = line;
         cached.wasLast = isLast;
@@ -523,8 +543,11 @@ export class Scene {
         host.uiFill(cx + 1, cy + 4, 4, 1, BORDER_H);
         host.uiTile(cx + 5, cy + 4, BORDER_BR);
         host.uiFill(cx + 1, cy + 1, 4, 3, SPACE);
-        host.uiText(cx + 2, cy + 1, "YES");
-        host.uiText(cx + 2, cy + 3, "NO");
+        // static labels go into the grid, never through uiText (voxel-spec
+        // §ui): a uiText here would take the live run away from the dialogue
+        // row typing underneath it
+        this.stamp(host, cx + 2, cy + 1, "YES");
+        this.stamp(host, cx + 2, cy + 3, "NO");
         host.uiTile(cx + 1, choice.yes ? cy + 1 : cy + 3, ARROW_CURSOR);
       } else if (choice.yes !== this.choiceYes) {
         this.choiceYes = choice.yes;

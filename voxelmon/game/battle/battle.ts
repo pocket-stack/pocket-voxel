@@ -36,6 +36,7 @@ import {
   MOVE_ANIM_PRE,
   TEXT_PRE_ADVANCE,
   TEXT_SCROLL_PAIR,
+  YES_NO_ANSWER,
   hpDrainClosingFrames,
   hpDrainStepFrames,
 } from "../rules/timing.ts";
@@ -146,11 +147,23 @@ export class WildBattle implements EffectBattle {
   /** Set once finish() ran; the shell pops the state and stages the return. */
   finished: BattleResult | null = null;
 
+  /**
+   * Audio cues queued AT THE REFERENCE'S OWN CALL SITES and drained once per
+   * tick by the shell's policy (game.ts driveAudio). The battle names them
+   * (`cry:<species>`, `music:victory`, `music:restore`); it never touches the
+   * surface. Watching battle state from outside got the cues right but their
+   * ORDER wrong — the cry fired before the silhouettes landed, the victory
+   * theme a text box late, the map theme ten ticks after teardown.
+   */
+  readonly audioCues: string[] = [];
+
   // presentation flags the ui reads (enter() windows, BattleState.lua:1459+)
   introBalls = true;
   showPlayerBack = true;
   sendingOut = false;
   blackedOut = false;
+  /** SE_HIDE_ENEMY_MON_PIC (:1174) — the ball chain takes the pic away. */
+  enemyHidden = false;
   lastBall: string | null = null;
 
   // queue pump state (updateQueue :1064)
@@ -175,6 +188,9 @@ export class WildBattle implements EffectBattle {
   private charTimer = 0;
   choiceOpen = false;
   choiceYes = true;
+  /** The answer given, held on screen (ChoiceBox.lua:34) before it lands. */
+  private choicePending: boolean | null = null;
+  private choiceHold = 0;
 
   // party / item menus (v1 internal phases in place of the Lua's ui stack)
   partyIndex = 0;
@@ -183,7 +199,7 @@ export class WildBattle implements EffectBattle {
   itemList: string[] = [];
 
   private participants = new Set<PartyMon>();
-  /** mons that leveled up (EvolveAfterBattle hook — unused v1, kept). */
+  /** mons that leveled up; game.ts runs Evolution.checkParty on the way out. */
   leveledUp = new Set<PartyMon>();
 
   /**
@@ -415,6 +431,12 @@ export class WildBattle implements EffectBattle {
         return true;
       }
       if (item.anim !== undefined || item.hitRow) {
+        // :1174-1177 — HIDEPIC/SHOWPIC are ENGINE state, not animation
+        // state: the assignment sits before the animation-player block, so
+        // it happens with animations off too. The ball chain hides the wild
+        // mon while the ball shakes and brings it back on a breakout.
+        if (item.anim === "HIDEPIC_ANIM") this.enemyHidden = true;
+        else if (item.anim === "SHOWPIC_ANIM") this.enemyHidden = false;
         // PlayMoveAnimation's Delay3 before the first animation frame
         // (:1158-1167); v1 has no subanimation player, so the row then
         // resolves at once — the Lua's own no-animPlayer fallback applies
@@ -472,17 +494,34 @@ export class WildBattle implements EffectBattle {
         return true;
       }
       if (item?.choice && this.choiceOpen) {
+        // ChoiceBox.lua:34-45: the answer is held on screen for
+        // YES_NO_ANSWER frames before control comes back — both branches of
+        // DisplayTwoOptionMenu pay it (engine/menus/text_box.asm:322,:333).
+        if (this.choicePending !== null) {
+          this.choiceHold -= 1;
+          if (this.choiceHold <= 0) {
+            const answer = this.choicePending;
+            const fn = item.choice;
+            this.choicePending = null;
+            this.choiceOpen = false;
+            this.current = null;
+            fn(answer);
+          }
+          return true;
+        }
         if (input.wasPressed("up") || input.wasPressed("down")) {
           this.choiceYes = !this.choiceYes;
-        }
-        let answer: boolean | null = null;
-        if (input.wasPressed("a")) answer = this.choiceYes;
-        else if (input.wasPressed("b")) answer = false; // ChoiceBox B = NO
-        if (answer !== null) {
-          const fn = item.choice;
-          this.choiceOpen = false;
-          this.current = null;
-          fn(answer);
+        } else if (input.wasPressed("a")) {
+          // HandleMenuInput_ (home/window.asm) beeps on A and B alike
+          this.audioCues.push("sfx:Press_AB");
+          this.choicePending = this.choiceYes;
+          this.choiceHold = YES_NO_ANSWER;
+        } else if (input.wasPressed("b")) {
+          this.audioCues.push("sfx:Press_AB");
+          // .choseSecondMenuItem snaps the cursor to NO for the hold
+          this.choiceYes = false;
+          this.choicePending = false;
+          this.choiceHold = YES_NO_ANSWER;
         }
         return true;
       }
@@ -533,8 +572,11 @@ export class WildBattle implements EffectBattle {
     // the slide has landed (:1465 introSlide + :1793-1802); the voxel v1
     // has no silhouettes, so the hold rides the queue instead.
     this.queue.push({ wait: BATTLE_SLIDE_IN_FRAMES });
-    // PlayCry before WildMonAppearedText (:1496-1510, #303) — audio is a
-    // later rung; the row order is kept without a row.
+    // PrintBeginningBattleText (:1496-1510, common_text.asm:10-19, #303): a
+    // wild battle calls PlayCry BEFORE the "appeared!" box, so the cry lands
+    // with the text — after the silhouettes have slid in, not on the frame
+    // the battle was pushed.
+    this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
     this.say(`Wild ${this.enemy.name}\nappeared!`);
     // _InitBattleCommon clears the intro chrome the instant the intro text
     // is dismissed (:1534-1539, #317)
@@ -1065,7 +1107,12 @@ export class WildBattle implements EffectBattle {
       // staging layer hides the side's card off the `fainted` flag
     });
     this.insertNext({ wait: FAINT_SLIDE });
-    // wild victory music before EnemyMonFaintedText (:3673-3681) — audio out
+    if (!battler.isPlayer) {
+      // FaintEnemyPokemon .wild_win (:3673-3681, core.asm:792-795): the
+      // victory theme starts AS THE SLIDE LANDS, before EnemyMonFaintedText
+      // and the exp text — not after the box is dismissed.
+      this.actNext(() => this.audioCues.push("music:victory"));
+    }
     this.sayNext(`${displayName(battler)}\nfainted!`);
     if (battler.isPlayer) {
       this.act(() => this.playerMonFainted());
@@ -1424,6 +1471,9 @@ export class WildBattle implements EffectBattle {
       console.warn(`battle finished ${this.result} with no healthy party; forcing blackout`);
       this.result = "lose";
     }
+    // :4647 — leaving the battle brings the map theme back HERE, at teardown,
+    // not after the POST_BATTLE_RETURN hold the shell still owes
+    this.audioCues.push("music:restore");
     this.finished = this.result ?? "run";
   }
 

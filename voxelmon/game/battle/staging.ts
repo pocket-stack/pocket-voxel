@@ -85,7 +85,14 @@ export function desiredCards(
   const out: CardDesire[] = [];
   const [ex, ey] = staging.arena.enemyCell;
   const [px, py] = staging.arena.playerCell;
-  if (battle.enemy && !battle.enemy.fainted && battle.result !== "caught") {
+  // BattleState.lua:5283 — the draw gate reads enemyHidden too, so the ball
+  // chain's HIDEPIC row takes the wild mon off the field while it shakes
+  if (
+    battle.enemy &&
+    !battle.enemy.fainted &&
+    !battle.enemyHidden &&
+    battle.result !== "caught"
+  ) {
     const pic = picPageFor(data, battle.enemy.mon.species);
     if (pic >= 0) out.push({ side: 1, pic, x: ex, y: ey });
   }

@@ -657,7 +657,21 @@ only clock; tile animation and menu cursors derive from it.
    anchors were re-based 2026-08-06 with that bound in hand. (A
    rank-preserving order was tried first specifically to hold the anchor;
    neighbour-cell border ties move regardless, so the ceremony was paid
-   rather than the uniformity constraint weakened.)
+   rather than the uniformity constraint weakened.) A **GAMEPLAY** change is
+   the third and plainest re-basing event, and it is the only one that moves
+   both rungs for the same reason: the tape is intent, so when the guest
+   legitimately does something different the op stream itself is different
+   and every hash downstream of it follows. It still owes the same proof —
+   which marks moved, and why each one had to. The 2026-08-07 parity pass
+   (§11) moved **3 of the 15 marks**: `battle-intro` at both rungs, because
+   a two-line message page now shows BOTH of its lines (the finished row
+   went from a clobbered `uiText` to grid tiles); and `encounter-seen` /
+   `escaped` at both rungs, because the battle screen is now torn down
+   before the post-battle hold instead of staying up through it, so the
+   mark lands on the map rather than on the battle. The other twelve are
+   byte-identical, which is itself the evidence that the overworld changes
+   in that pass — cues, deferred seam music, the bump poll, the map-script
+   dispatch — are audible or behavioural but not pictorial.
 
 ## 8. Audio
 
@@ -795,12 +809,113 @@ Later rungs, in dependency order: the GB UI colour layer (a `uiPal` op — the
 one piece of RED++ parity that needs a new op); pak slimming for the
 PSP-1000's 24 MB and the frame budget together
 (hull instancing over the STMP per-cell range, which is the only cut left for
-the carved trees the distance dial cannot reach; per-map streaming); the arena
+the carved trees the distance dial cannot reach; per-map streaming);
+**neighbour-map NPC ghosts** (§11); the arena
 clearance walk (needs cook-time heights in gamedata) and the authored arena
-table; the full script verb set and story flags; trainer battles + AI
+table; the rest of the script verb set and the story cutscenes (§11);
+trainer battles + AI
 layers; the desk-set templates, stairs, and detected props; battle move
 animations; the box system, marts, and the start menu; Blue/Yellow manifests;
 first/third person; link play never.
 
 Stadium battle models are **permanently out of scope** — they require an N64
 ROM this pipeline does not accept.
+
+## 11. The parity pass (2026-08-07)
+
+A line-by-line re-read of the port against `gen1recomp` at HEAD `f0ed2ef`,
+subsystem by subsystem, with every claimed divergence checked twice at its
+cited lines on both sides. The rules modules came through clean — damage,
+crit, accuracy, the type chart, catching, exp, growth, collision, ledges and
+connections are the Lua's arithmetic verbatim. Everything the pass found was
+in the glue: a surface contract used the wrong way, registry entries never
+made, and cues fired from the wrong moment.
+
+**Fixed here.**
+
+- **`uiText` is one live run, and a finished row is not it.** The spec says
+  the core retains only the last `uiText` (§ui). The guest emitted one per
+  row, so on every two-line page the first line went blank the instant the
+  second began typing — nearly every sign, NPC line and battle message in
+  the shipped maps. Finished rows are stamped into the retained grid now
+  (glyph codes ARE ui tile ids), and only the typing row is a `uiText`. The
+  YES/NO labels had the same shape; they are grid tiles too.
+- **The string that crosses the boundary is cell-exact.** `'s` is one glyph
+  to the guest (Font.lua:262 matches digraphs greedily) and two characters
+  to the surface, so a reveal stopped one cell short and a padded row ran
+  one cell wide: "Can't escape!" printed as "Can't escape". The cook mints a
+  code point per multi-character charmap entry (`LIGATURE_BASE + code`) and
+  `toCells` emits it.
+- **Two reachable move effects were unregistered.** `SPEED_DOWN1_EFFECT`
+  (WEEDLE's STRING SHOT, Route 2 grass) printed "But, it failed!" every
+  time and never touched the speed stage; `POISON_SIDE_EFFECT1` (POISON
+  STING) could never poison. The census was re-derived from the cooked map
+  set rather than patched — `DEFENSE_UP1_EFFECT`, `FLINCH_SIDE_EFFECT1`,
+  `TWO_TO_FIVE_ATTACKS_EFFECT` and `FOCUS_ENERGY_EFFECT` become reachable
+  once a caught mon grinds, and are registered too.
+- **`EvolveAfterBattle` was never wired.** `battle.leveledUp` was written
+  and never read, so a SQUIRTLE that reached 16 on Route 1 stayed a
+  SQUIRTLE forever (the offer is gated on levelling *this* battle, so there
+  is no catching up later). `Evolution.checkParty`'s decision half is
+  ported; `game.ts` runs the pages, the apply and the evolved species'
+  exact-level learn check on the way out of a battle.
+- **The hand-ported map scripts have a call site.** The 8-verb runner had
+  no caller: `showMapText` went straight to extracted text, and a text_asm
+  pointer extracts only its FIRST branch — so Mom offered the wake-up line
+  to a trainer who already had a starter, forever, and Oak never stopped
+  barring the grass. `world/mapscripts.ts` carries the scripts for the maps
+  this pak cooks, transcribed from `data/scripts/`, and the verb set grew
+  to what they invoke (`check_flag`, `jump`/`jump_if_true`/`jump_if_false`,
+  `label`, `face_player`, `heal_party`, `play_once`, `fade`). Jump targets
+  resolve by row, by label and by `"end"`; a re-entrant `resume` lands the
+  pending yield instead of throwing; an unknown verb logs the row it drops.
+- **Cues fire where the reference fires them.** The battle now queues its
+  audio at the Lua's own call sites and the shell drains that queue, which
+  fixed three orderings at once: the wild mon's cry sounded before the
+  silhouettes had landed, the victory theme a text box late, the map theme
+  ten ticks after teardown. The field cues that were simply absent are in:
+  `Collision` on a wall bonk (with its 16-frame cooldown), `Ledge` on a
+  hop, `Go_Inside`/`Go_Outside` on a door warp. A connection crossing
+  defers the new map's theme to the frame the seam step LANDS.
+- **The post-battle hand-back is the map's, not the battle's.** The battle
+  screen is torn down at teardown, and it is the map that pays
+  POST_BATTLE_RETURN and then MapEntryAfterBattle's 24 frames.
+- **YES/NO answers hold.** Both branches of `DisplayTwoOptionMenu` hold 15
+  frames with the menu up, and B snaps the cursor to NO first — in the
+  overworld box and in the battle's, which also owed the A/B beep.
+- **Smaller ones.** The content-boundary bump ends the direction poll
+  instead of continuing it (a held diagonal walked on the other axis, and
+  the turn-in-place flag re-armed mid-hold); a locked warp no longer leaks
+  `doorWarp` into the next one, and resumes a parked script instead of
+  stranding it; border-extended tile reads use a floored modulo, as Lua's
+  `%` does; the ball chain hides the wild mon while the ball shakes
+  (`HIDEPIC`/`SHOWPIC` are engine state, not animation state).
+
+**Found, not fixed, and why.**
+
+- **Neighbour-map NPC ghosts.** Upstream keeps connected maps' objects
+  alive and ticking so a connected map is not empty and an NPC that
+  wandered while you were away is where it should be at the seam
+  (`OverworldController.lua:533` ghosts, ticked at :1039, drawn at :4738).
+  The port builds only the current map's list. The port already draws the
+  neighbours' terrain, so the gap is visible — but the fix spends entity
+  slots against a 16-slot budget on a machine whose frame is already
+  locked, so it wants its own pass with a hardware measurement, not a
+  drive-by.
+- **`TWINEEDLE_EFFECT` and `SWITCH_AND_TELEPORT_EFFECT`.** Reachable at
+  L19-20 on a caught mon. The first wants the per-hit seam its poison
+  reroute uses; the second ends the wild battle from inside a move, which
+  is a battle-exit path this slice does not have.
+- **Item balls, and the ball supply.** ROUTE_2's two item-ball objects are
+  inert, and with no reachable ball source the fully-ported catch path is
+  dead content in the shipped build. Both want the item-object interaction
+  upstream has, which is the same seam marts and the start menu sit behind.
+- **ROM wording for three lines.** The learn-move, confusion-wears-off and
+  paralysis lines print the Lua's own fallback templates rather than
+  resolving the ROM label. The port declares this adaptation for the pure
+  rules modules (`rules/status.ts`); making it consistent means porting
+  `RomText` and sweeping every call site, which is a pass of its own.
+- **One RNG stream vs three.** Upstream runs every gameplay roll through
+  one generator; the port partitions three seeded streams so ambience and
+  battles cannot perturb the route. Changing the topology would move every
+  committed hash to buy nothing a player could see. Kept, deliberately.

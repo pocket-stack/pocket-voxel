@@ -28,6 +28,7 @@ import {
   MAX_COLS,
   SPACE,
   encodeGlyphs,
+  toCells,
 } from "../ui/tiles.ts";
 import { HP_BAR_PIXELS, hpBarPixels } from "../rules/timing.ts";
 import type { WildBattle } from "./battle.ts";
@@ -89,6 +90,8 @@ const ARROW_Y = 16;
 interface MsgRowCache {
   text: string;
   revealed: number;
+  /** true once the row was stamped into the grid (it stopped being live). */
+  stamped: boolean;
 }
 
 export class BattleUi {
@@ -498,12 +501,24 @@ export class BattleUi {
     battle.shown.forEach((line, i) => {
       if (i >= MSG_ROWS.length) return;
       const isLast = i === battle.shown.length - 1;
-      const pad = Math.max(0, MAX_COLS - line.codes.length);
-      const text = isLast ? line.text : line.text + " ".repeat(pad);
       const cached = this.msgRows[i];
-      if (!cached || cached.text !== text) {
+      if (!isLast) {
+        // a finished row is chrome now: the core retains only the LAST
+        // uiText, so leaving it there would blank it the instant the next
+        // line begins (drawTextArea :5515 draws both rows every frame)
+        if (cached && cached.stamped && cached.text === line.text) return;
+        for (let c = 0; c < line.codes.length; c++) {
+          host.uiTile(MSG_X + c, MSG_ROWS[i], line.codes[c]!);
+        }
+        const pad = Math.max(0, MAX_COLS - line.codes.length);
+        if (pad > 0) host.uiFill(MSG_X + line.codes.length, MSG_ROWS[i], pad, 1, SPACE);
+        this.msgRows[i] = { text: line.text, revealed: -1, stamped: true };
+        return;
+      }
+      const text = toCells(line.text);
+      if (!cached || cached.stamped || cached.text !== text) {
         host.uiText(MSG_X, MSG_ROWS[i], text);
-        this.msgRows[i] = { text, revealed: -1 };
+        this.msgRows[i] = { text, revealed: -1, stamped: false };
         textsEmitted = true;
       }
     });

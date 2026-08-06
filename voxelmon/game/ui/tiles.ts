@@ -249,6 +249,49 @@ export function glyphLen(text: string): number {
 }
 
 /**
+ * Private-use base for the multi-character charmap sequences. `uiText`
+ * addresses the pak's CMAP by CODE POINT, so a glyph the GB spells with two
+ * source characters (`'s`, `<PK>`) has no code point of its own; the cook
+ * mints one here (LIGATURE_BASE + the glyph's GB code) and `toCells` emits
+ * it. Font.lua:262 matches those sequences greedily and Font.lua:358
+ * advanceOf gives each exactly one cell, so this is what keeps the guest's
+ * count and the surface's pen agreeing.
+ */
+export const LIGATURE_BASE = 0xe000;
+
+/**
+ * The cell-exact form of a line: one UTF-16 code unit per GB glyph cell.
+ *
+ * `uiText` is counted by the surface in code points (uiReveal caps them and
+ * the pen advances one cell each), while the guest counts GLYPHS — so a line
+ * carrying `'s` used to reveal one cell short of its end and pad one cell
+ * wide. Single-char glyphs stay their own character, which keeps recorded op
+ * traces readable; only the digraphs take a minted code point.
+ */
+export function toCells(text: string): string {
+  let out = "";
+  let i = 0;
+  outer: while (i < text.length) {
+    const bucket = MULTI_BY_HEAD.get(text[i]!);
+    if (bucket) {
+      for (const [seq, code] of bucket) {
+        if (text.startsWith(seq, i)) {
+          out += String.fromCharCode(LIGATURE_BASE + code);
+          i += seq.length;
+          continue outer;
+        }
+      }
+    }
+    const cp = String.fromCodePoint(text.codePointAt(i)!);
+    // an unmapped character is a SPACE to encodeGlyphs, so it must be one
+    // here too or the cell count would drift again
+    out += SINGLE.has(cp) ? cp : " ";
+    i += cp.length;
+  }
+  return out;
+}
+
+/**
  * Cut a string after `n` glyphs — the reveal boundary in source-string
  * space, used by tests to reason about uiReveal counts.
  */

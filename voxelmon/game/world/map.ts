@@ -72,7 +72,17 @@ export function defCellTile(
   }
   const block = ts.blocks[id ?? 0];
   if (!block) return null;
-  return block[(ty % 4) * 4 + (tx % 4)];
+  return block[mod4(ty) * 4 + mod4(tx)];
+}
+
+/**
+ * Lua's `%` is FLOORED, JavaScript's is truncated: a border-extended read at a
+ * negative tile coordinate (`tileAt(-1, y)`) picks index 3 of the block row in
+ * the reference and index -1 here, which reads nothing. Every live caller
+ * checks inBounds first today, so this is the guard on the read itself.
+ */
+function mod4(n: number): number {
+  return ((n % 4) + 4) % 4;
 }
 
 /** Map.lua:83 defIsWalkableCell. */
@@ -180,7 +190,7 @@ export class GameMap {
     const bx = Math.floor(tx / 4);
     const by = Math.floor(ty / 4);
     const block = this.tileset.blocks[this.blockAt(bx, by)];
-    return block[(ty % 4) * 4 + (tx % 4)];
+    return block[mod4(ty) * 4 + mod4(tx)];
   }
 
   // Map.lua:211 cellTile — the collision tile of a cell: bottom-left 8x8

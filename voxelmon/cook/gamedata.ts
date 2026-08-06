@@ -4,10 +4,12 @@
 // §gamedata) plus an `atlas` object carrying the page-index maps the guest
 // needs: sprite sheet name -> page, species -> front-pic page, the player
 // back page and the emote page — and `mapPalette`, the per-map SGB palette
-// index the guest emits at map entry. CMAP maps each single-char charmap entry's
-// UTF-16 code point to its GB tile code (multi-char sequences like <PKMN>
-// skip v1); the UI page lays glyphs at their GB codes, so tile id == code.
+// index the guest emits at map entry. CMAP maps each charmap entry's UTF-16
+// code point to its GB tile code, multi-character sequences included at their
+// minted LIGATURE_BASE point; the UI page lays glyphs at their GB codes, so
+// tile id == code.
 
+import { LIGATURE_BASE } from "../game/ui/tiles.ts";
 import type { GenData, MapDef, TilesetDef } from "./data.ts";
 
 export interface AtlasIndex {
@@ -181,14 +183,25 @@ export function buildGamedata(gen: GenData, atlas: AtlasIndex, cookedMaps: strin
 }
 
 /**
- * CMAP pairs: UTF-16 code point of each single-char glyph -> its GB tile
- * code, strictly ascending, first entry wins on duplicates.
+ * CMAP pairs: UTF-16 code point of each glyph -> its GB tile code, strictly
+ * ascending, first entry wins on duplicates.
+ *
+ * A multi-character sequence (`'s`, `<PK>`) is ONE glyph on the GB but has no
+ * code point of its own, so it gets a minted one at LIGATURE_BASE + code —
+ * the guest's `toCells` emits that, which is what makes a uiText string one
+ * code point per cell.
  */
 export function buildCharmap(gen: GenData): [number, number][] {
   const seen = new Map<number, number>();
   for (const entry of gen.font.charmap) {
     if (typeof entry.seq !== "string" || entry.seq.length !== 1) continue;
     const cp = entry.seq.charCodeAt(0);
+    if (cp > 0xffff) continue;
+    if (!seen.has(cp)) seen.set(cp, entry.code);
+  }
+  for (const entry of gen.font.charmap) {
+    if (typeof entry.seq !== "string" || entry.seq.length === 1) continue;
+    const cp = LIGATURE_BASE + entry.code;
     if (cp > 0xffff) continue;
     if (!seen.has(cp)) seen.set(cp, entry.code);
   }

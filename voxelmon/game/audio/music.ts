@@ -101,6 +101,20 @@ export class AudioDirector {
     return true;
   }
 
+  /**
+   * Music.lua:383 playOnce — a jingle, played over the map theme's slot.
+   *
+   * DEVIATION: the Lua arms `pendingRestore` and :403 oneShotPlaying holds
+   * the caller until the jingle ends, at which point Music.update puts the
+   * map theme back. This surface has no end-of-song query — that would be a
+   * new op, i.e. a later rung — so the caller decides when to `restore()`.
+   */
+  playOnce(song: string): boolean {
+    if (!this.banks?.song(song)) return false;
+    this.play(song);
+    return this.current === song;
+  }
+
   /** Music.lua:407 restoreMap — back to the map theme after a battle. */
   restore(): void {
     this.current = null;
