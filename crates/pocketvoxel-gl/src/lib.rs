@@ -276,10 +276,33 @@ impl Renderer {
     }
 
     /// Whether vitaGL brought its runtime shader compiler up. False means
-    /// `libshacccg.suprx` is not installed: `glClear` still works, so the
+    /// `libshacccg.suprx` could not be loaded: `glClear` still works, so the
     /// screen is paintable, but no geometry can ever draw.
     pub fn shader_compiler_online() -> bool {
         unsafe { gl::is_shark_online != 0 }
+    }
+
+    /// Retry the shader-compiler load from a path vitaGL does not probe, and
+    /// adopt the result if it works.
+    ///
+    /// vitaGL tries vitaShaRK's default and `ur0:data/external/`, both on
+    /// internal storage. A memory card is the one place a developer can put a
+    /// file over VitaShell's USB session, so a `ux0:` copy of the module is
+    /// worth a second attempt before telling the player to go and install
+    /// one. `is_shark_online` gates nothing in vitaGL beyond its own warning
+    /// configuration, so adopting a late success is sound.
+    ///
+    /// # Safety
+    /// Call on the render thread after `vglInit*`, before any draw.
+    pub unsafe fn adopt_shader_compiler(path: &core::ffi::CStr) -> bool {
+        if gl::is_shark_online != 0 {
+            return true;
+        }
+        if gl::shark_init(path.as_ptr()) >= 0 {
+            gl::is_shark_online = 1;
+            return true;
+        }
+        false
     }
 
     /// Bytes of atlas texture currently resident (boot log / telemetry).

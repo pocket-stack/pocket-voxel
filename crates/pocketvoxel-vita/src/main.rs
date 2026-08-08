@@ -282,6 +282,22 @@ unsafe fn run() {
     // vitaGL's OWN answer, not a guess at where the module lives: it probes
     // vitaShaRK's default and `ur0:data/external/`, and a filesystem check
     // that misses either would halt a console that works.
+    //
+    // Both of vitaGL's probes are on internal storage. A memory card is the
+    // one place a developer can drop a file during a VitaShell USB session,
+    // so a `ux0:` copy gets a second attempt before the player is told to go
+    // and install one.
+    if !vgl::Renderer::shader_compiler_online() {
+        for path in [
+            c"ux0:data/libshacccg.suprx",
+            c"ux0:data/voxelmon/libshacccg.suprx",
+        ] {
+            if vgl::Renderer::adopt_shader_compiler(path) {
+                trail(&format!("gl: shader compiler loaded from {path:?}"));
+                break;
+            }
+        }
+    }
     if !vgl::Renderer::shader_compiler_online() {
         fail(
             "libshacccg.suprx is not installed.\n\n\
@@ -290,7 +306,8 @@ unsafe fn run() {
              module has to be present. Install it once with VitaDeploy or \
              ShaccCgSetup (it extracts the module from a firmware update \
              file); every vitaGL homebrew on the system needs the same \
-             module.\n",
+             module. A copy at ux0:data/libshacccg.suprx also works, which \
+             is the one place a VitaShell USB session can reach.\n",
             stage_color::NO_SHADER_COMPILER,
             true,
         );

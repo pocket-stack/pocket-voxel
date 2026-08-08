@@ -154,6 +154,14 @@ extern "C" {
 }
 
 extern "C" {
+    /// vitaShaRK's loader, which is what vitaGL itself calls during
+    /// `vglInit*` — `NULL` means "use the default location". Reachable
+    /// directly so a host can retry the load from somewhere vitaGL does not
+    /// probe; returns < 0 on failure.
+    pub fn shark_init(path: *const i8) -> c_int;
+}
+
+extern "C" {
     /// vitaGL's own runtime-shader-compiler status, set by
     /// `start_shader_compiler()` during `vglInit*`. Not in vitaGL.h — it is a
     /// plain global in `shared.h` — but it is the ONLY authoritative answer to
@@ -162,7 +170,7 @@ extern "C" {
     /// list and gets it wrong: vitaGL tries vitaShaRK's default AND
     /// `ur0:data/external/`, so a path check that misses one halts a console
     /// that would have run.
-    pub static is_shark_online: GLboolean;
+    pub static mut is_shark_online: GLboolean;
 }
 
 /// `vglMemType::VGL_MEM_RAM` — the pool the pak's VBOs and the atlas
