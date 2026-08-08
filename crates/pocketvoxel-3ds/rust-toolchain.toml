@@ -1,0 +1,7 @@
+# Pinned to the toolchain the 3DS host was proven on (hosts/3ds/core in the
+# PocketJS tree pins the same one). `rust-src` is what `-Z build-std` compiles
+# core/alloc from.
+[toolchain]
+channel = "nightly-2026-07-02"
+components = ["rust-src"]
+profile = "minimal"

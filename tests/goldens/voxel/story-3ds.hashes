@@ -1,0 +1,14 @@
+# FNV-1a64 over the decoded 400x240 RGBA of each story mark, captured from dist/3ds/voxelmon-capture.3dsx
+# under Azahar 2125.1.2, graphics_api=0 (software). Determinism and regression only — parity with the
+# sim oracle is what tests/e2e/voxel-3ds.ts's mean and coarse-structure gates test.
+bedroom 041160d61dce4399
+downstairs 8007b36a7e879866
+pallet-town 83cbe9451f505a1e
+sign-read f509add7e92409de
+oaks-lab 8070d8928ec2acc1
+lab-exit 3616dead32faf7bb
+route-1 f47b0044677b6e2e
+mid-route 9db0ae2b82ed538e
+encounter-seen 5499fd47af8a2894
+viridian 4875a3d96971e59e
+done ca22eb43ece37b29
