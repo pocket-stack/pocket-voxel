@@ -59,9 +59,17 @@ static APP_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/game.js"));
 /// The quality rung this build asks the core for (build.rs `VOXELMON_TIER`).
 static TIER: &str = env!("VOXELMON_TIER");
 
-/// Pak search order: a writable copy first so a device session can drop in a
-/// re-cooked pak without reinstalling the 32 MB VPK, then the VPK's own.
-const PAK_PATHS: [&str; 2] = ["ux0:data/voxelmon/voxelmon.vxpak", "app0:voxelmon.vxpak"];
+/// Pak search order: a writable copy first, so a device session can drop in a
+/// re-cooked pak without reinstalling the 32 MB VPK, then the VPK's own copy.
+/// Both `app0:` spellings are tried, and the installed path is spelled out
+/// after them, because which of the three a given firmware accepts is not
+/// worth a device round trip to find out.
+const PAK_PATHS: [&str; 4] = [
+    "ux0:data/voxelmon/voxelmon.vxpak",
+    "app0:voxelmon.vxpak",
+    "app0:/voxelmon.vxpak",
+    "ux0:app/PVOX00001/voxelmon.vxpak",
+];
 
 /// The analog stick reads 0..255 with 128 at rest; this much off-centre
 /// counts as a direction.
