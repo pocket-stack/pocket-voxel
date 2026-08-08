@@ -71,6 +71,10 @@ crates/
                       list lifecycle (the pocket3d-gu contract). (standalone)
   pocketvoxel-psp/    the EBOOT: QuickJS realm + voxel surface + gu backend.
                       (standalone, hosts/psp toolchain pins)
+  pocketvoxel-gl/     vitaGL backend (§12). Same draw list, same contract as
+                      the gu backend. (standalone)
+  pocketvoxel-vita/   the VPK: QuickJS realm + voxel surface + gl backend +
+                      the PCM ring. (standalone, cargo-vita)
 voxelmon/
   import/             ROM importer (TS): manifest-driven decode of tilesets,
                       maps, sprites, species, moves, text, encounters, pics,
@@ -83,7 +87,7 @@ voxelmon/
 contracts/spec/voxel-spec.ts     the surface, single source of truth
 contracts/spec/gen-voxel-rust.ts → crates/.../spec.rs (drift-guarded)
 tools/voxel.ts                   import | cook | sim | check | record | shots
-                                 | wav | psp | run | parity
+                                 | wav | psp | run | vita | parity
 docs/VOXEL.md                    this file
 tests/voxel-*.test.ts            contract drift + importer parity + gameplay
 tests/goldens/voxel/             frame HASHES only
@@ -919,3 +923,101 @@ made, and cues fired from the wrong moment.
   one generator; the port partitions three seeded streams so ambience and
   battles cannot perturb the route. Changing the topology would move every
   committed hash to buy nothing a player could see. Kept, deliberately.
+
+## 12. The PS Vita port
+
+The Vita runs the same guest bundle, the same cooked pak and the same core as
+the PSP. What is new is a second backend for the one draw list
+(`crates/pocketvoxel-gl`) and a second application shell around it
+(`crates/pocketvoxel-vita`). Build it with `bun tools/voxel.ts vita --release`;
+the result is `dist/voxelmon/voxelmon.vpk`, which carries the pak inside it, so
+installing that one file in VitaShell is the whole install.
+
+**One bundle, two machines, because the HOST names the rung.** `psp-main.ts`
+never mentions a console. The quality rung is a host decision the shell makes
+once at boot (`op::QUALITY`, §4a), which is why the guest that ships in the
+VPK is byte-identical to the one baked into the EBOOT. `--tier
+<psp|vita|desktop>` overrides the rung for an A/B measurement without editing
+the spec.
+
+### The backend
+
+The core's projection is already `Mat4::perspective_gl`, so GL's own
+conventions — depth range [0, 1], `GL_LEQUAL`, clear depth 1.0 — **are** the
+software rasterizer's "less wins". The GE backend has to express the same two
+relations through the GE's inverted 16-bit range; this one does not, and the
+ghost's occluded-only pass is a plain `GL_GREATER`.
+
+Four differences from `pocketvoxel-gu` carry the port:
+
+- **The pak's vertex and index pools are GL buffer objects**, uploaded once at
+  boot, and a mesh draws by re-pointing the attribute byte offsets at its own
+  `vert_base` — the pak stores each mesh's indices relative to that base, so
+  folding it into the offsets is what makes them correct without a
+  base-vertex draw. vitaGL's fixed-function path skips both the index scan and
+  the staging copy when every attribute comes from a buffer object, so the
+  world pass costs **no per-vertex CPU at all**.
+- **`GL_SHORT` attributes are not normalized here.** vitaGL maps them to
+  GXM's `S16`, so the cooked i16 world coordinates arrive as the integers they
+  are and the model matrix is a plain seam translation — no ×32768
+  counter-scale. The cooked UVs still carry the GE's 1/32768 fixed point, and
+  that divisor rides in the **texture matrix** instead, set once per frame.
+- **The CLUT is resolved on the CPU.** GXM has no palette sampler vitaGL
+  exposes, so `atlas.rs` expands each (page, frame, palette, tinted) pair into
+  an RGBA texture and caches it under a 24 MB budget. The day tint multiplies
+  into the palette exactly as the GE backend's CLUT rewrite does, so a `tint`
+  op drops every tinted texture — correct because the guest emits `tint` on
+  map transitions, not per frame.
+- **The raster is native 960x544.** The logical viewport stays 480x272 (the
+  camera, the UI layout and every golden are defined there) and only the
+  physical viewport doubles, so geometry is transformed once and rasterized at
+  four times the pixels. Atlases sample `GL_NEAREST`, so the art reads as the
+  same picture rather than a blurred one, and the GB UI layer keeps its
+  fractional logical position instead of rounding to a device pixel as the GE
+  backend must.
+
+`resolve_pal` is shared with the other two backends, so the software
+rasterizer, the GE and GXM cannot bind different colours for the same draw.
+
+### libshacccg.suprx is a hard prerequisite
+
+**vitaGL builds even its fixed-function shaders at runtime.** `ffp.c`'s
+`reload_ffp_shaders` formats a Cg source for the exact state mask a draw needs
+and hands it to `shark_compile_shader_extended`, so the PS Vita's own shader
+compiler module has to be present on the console — this is not an optional
+extra for GLSL programs. The VPK links `SceShaccCg_stub_weak` rather than the
+strong stub so that a console without the module still *launches* the
+application; `require_shader_compiler()` then checks the three install
+locations and halts with an explanation, and writes it to
+`ux0:data/voxelmon/error.txt` as well, because the player who hits this is
+looking at a black screen with no way to read a log.
+
+The module is installed once, with VitaDeploy or ShaccCgSetup, and every
+vitaGL homebrew on the system shares it.
+
+### The shell
+
+No PocketJS host library sits underneath. The Vita has std, a real allocator
+and hundreds of megabytes, so the arena trio and worker thread `pocketjs-psp`
+exists to provide have no counterpart to reuse; what is borrowed is a design,
+not code — the PCM ring in `src/audio.rs` follows
+`vendor/pocketjs/hosts/vita/src/audio.rs`, which is where its disciplines
+(single writer, starvation sleeps rather than queued silence, the port opened
+and released on the main thread) were earned.
+
+Three things the PSP shell spends effort on are simply absent:
+
+- **no partition arithmetic.** The 32 MB pak is read straight into one
+  16-byte-aligned heap block and leaked. There is no MEMSIZE flag, no
+  power-of-two allocation class to dodge, and no reason not to hold the pak
+  and its buffer-object copy at the same time.
+- **no pipelined present.** `vglSwapBuffers` ends the GXM scene, queues the
+  flip and paces the loop against vsync; the PCM pump runs after it, while the
+  GPU is still consuming the frame.
+- **no arena-pressure heuristic.** The collection still runs on a warp
+  landing, where the guest holds the world frozen through the fade and the
+  stall is an invisible held cut, but the trigger is the landing itself rather
+  than a bump high-water mark.
+
+Buttons match the EBOOT: CIRCLE confirms, CROSS cancels, and the left stick
+walks one axis at a time.

@@ -1,0 +1,25 @@
+# pocketvoxel-gl — the vitaGL (GL ES 1.1 fixed function over GXM) backend for
+# the Pocket Voxel DrawList.
+#
+# STANDALONE CRATE, exactly like pocketvoxel-gu: it only links against
+# VitaSDK's libvitaGL, so workspace membership would break desktop
+# `cargo check/test`. Consumed as a path dep by the pocketvoxel-vita binary.
+#
+# Why vitaGL and not raw sceGxm: GXM is a shader-only pipe, and its shader
+# compiler (libshacccg.suprx) is a firmware module a user has to extract
+# before homebrew can use it. vitaGL ships precompiled GXP shaders for the
+# fixed-function path, so a Pocket Voxel VPK installs and runs on a stock
+# HENkaku console with nothing else on the memory card. The fixed-function
+# state it exposes — matrix stacks, alpha test, indexed i16 attributes — is
+# also the closest thing on this machine to the PSP GE the sibling
+# pocketvoxel-gu backend targets, which is what keeps the two backends
+# readable as one design.
+
+[package]
+name = "pocketvoxel-gl"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+pocketvoxel-core = { path = "../pocketvoxel-core" }

@@ -50,14 +50,17 @@ cook time (Bun, your machine)            run time (PSP)
 │    templates, bake ground+facades,     │    drive the retained scene
 │    pack chunks → voxelmon.vxpak        ├─ pocketvoxel-core: culling, camera
 └─ tapes/   intent tapes → .vtrace       │    rungs, draw list, chip synth
-     (the acceptance path)               └─ pocketvoxel-gu: the sceGu backend
+     (the acceptance path)               └─ the backend for this machine:
+                                              pocketvoxel-gu  (PSP, sceGu)
+                                              pocketvoxel-gl  (Vita, vitaGL)
 ```
 
 - **One pak, many machines.** Fidelity is a runtime *ladder*, not a build
   flag: the same 31 MB pak serves the PSP rung (30 fps present lock, 60 Hz
-  logic), a Vita-class rung, and the desktop identity rung — which replays
-  the pre-ladder picture pixel-for-pixel and is pinned by committed frame
-  hashes no dial edit may move.
+  logic), the Vita rung, and the desktop identity rung — which replays the
+  pre-ladder picture pixel-for-pixel and is pinned by committed frame hashes
+  no dial edit may move. The rung is named by the HOST, not the guest, so the
+  bundle in the VPK is byte-identical to the one in the EBOOT.
 - **No camera-relative representation change inside the visible field.** The
   PSP rung pays its frame budget with uniform dials only (coarse-carved
   trees, ground baked to per-chunk pages, stratified detail density) — a
@@ -91,6 +94,27 @@ bun tools/voxel.ts psp --release   # the EBOOT
 Put `EBOOT.PBP` and `voxelmon.vxpak` in one folder under `ms0:/PSP/GAME/`, or
 develop over [PSPLINK](https://github.com/pspdev/psplinkusb) with the pak
 served from `host0:`.
+
+### PS Vita
+
+The Vita runs the same guest bundle and the same cooked pak; a second backend
+(`crates/pocketvoxel-gl`, vitaGL over GXM) draws the same draw list at the
+native 960x544 raster while the logical viewport stays 480x272. Needs
+[VitaSDK](https://vitasdk.org) with vitaGL (`vdpm vitaGL`) and
+[cargo-vita](https://github.com/vita-rust/cargo-vita).
+
+```sh
+export VITASDK=~/vitasdk
+bun tools/voxel.ts vita --release   # dist/voxelmon/voxelmon.vpk
+```
+
+The VPK carries the pak inside it, so installing that one file is the whole
+install: copy it to the console (VitaShell's `SELECT` starts USB or FTP),
+press `X` on it, confirm. **The console needs `libshacccg.suprx`** — vitaGL
+compiles even its fixed-function shaders on the device, so the PS Vita's own
+shader compiler module must be installed (VitaDeploy or ShaccCgSetup does it
+once, and every vitaGL homebrew shares it). Without it the application says
+so and stops, rather than showing a black screen.
 
 ```sh
 bun test                    # 208 tests; ROM-gated suites skip with a reason
