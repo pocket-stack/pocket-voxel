@@ -979,6 +979,35 @@ Four differences from `pocketvoxel-gu` carry the port:
 `resolve_pal` is shared with the other two backends, so the software
 rasterizer, the GE and GXM cannot bind different colours for the same draw.
 
+### Why vitaGL, and the cost that choice carries
+
+There are two ways to draw 3D on this machine, and this family already
+contains the other one. `vendor/pocketjs/engine/pocket3d/crates/pocket3d-vita`
+drives **raw GXM with libvita2d's precompiled `.gxp` shaders** (checked in,
+with their provenance recorded), which is how OpenStrike ships a Vita VPK
+that installs as one file and runs on any HENkaku console.
+
+vitaGL was chosen here because its GL ES 1.1 fixed function is the closest
+thing on this hardware to the GE the sibling backend targets: hardware alpha
+test, per-vertex colour modulate and a texture matrix are all native, so the
+Vita picture is the PSP picture at four times the pixels rather than an
+approximation of it. The vita2d shader set cannot express that pass — its
+textured program takes no per-vertex colour, and **GXM has no fixed-function
+alpha test**. `pocket3d-vita` pays for both: baked per-vertex lighting
+becomes a second multiply-blended pass over the same geometry, and cutout
+textures are drawn late with alpha blending and a flat per-run tint.
+
+That price is small for OpenStrike's world geometry and large here. Pocket
+Voxel is cutout-dominated — grass, flowers, every entity billboard and the
+whole GB UI layer are alpha-cutout sprites, and §6 names hardware alpha test
+as what makes them work.
+
+**The cost of the vitaGL choice is the prerequisite below**, and it is a real
+one: it breaks the one-file install that every other Pocket app on this
+machine offers. A GXM backend that keeps the picture is the flagged
+follow-up, and the question it has to answer first is what replaces the alpha
+test for cutouts this dense.
+
 ### libshacccg.suprx is a hard prerequisite
 
 **vitaGL builds even its fixed-function shaders at runtime.** `ffp.c`'s
