@@ -293,7 +293,13 @@ unsafe fn run() {
     // several times the worst frame — and far below the 32 MB default this
     // machine has better uses for.
     vgl::gl::vglSetCircularPoolSize(8 * 1024 * 1024);
-    if vgl::gl::vglInitWithCustomSizes(
+    // The return value is NOT a success flag: vitaGL's init ends with
+    // `return res_fallback`, so TRUE means "your resolution did not fit and I
+    // substituted the maximum" and the ordinary successful path returns
+    // FALSE. Reading it as success is what turned a healthy init into a
+    // FATAL, and — because the failure path could not paint — into a
+    // splashscreen spinning forever.
+    let resolution_fell_back = vgl::gl::vglInitWithCustomSizes(
         // The legacy (immediate-mode) pool: this backend never uses
         // glBegin/glEnd, so it only has to be non-zero.
         64 * 1024,
@@ -304,10 +310,19 @@ unsafe fn run() {
         0,
         0,
         vgl::gl::SCE_GXM_MULTISAMPLE_NONE,
-    ) == 0
-    {
-        // Nothing can paint if GL never came up; the card is the only channel.
-        fail("vglInit failed", stage_color::BOOTING, false);
+    ) != 0;
+    if resolution_fell_back {
+        trail("gl: WARNING — vitaGL substituted the display's maximum resolution");
+    }
+    // Whether init actually produced something usable is a question about
+    // memory, so ask memory.
+    let pool = vgl::gl::vglMemFree(vgl::gl::VGL_MEM_RAM);
+    if pool == 0 {
+        fail(
+            "vitaGL initialized with an empty RAM pool",
+            stage_color::NO_VRAM,
+            false,
+        );
     }
     vgl::gl::vglWaitVblankStart(1);
     vgl::Renderer::paint(

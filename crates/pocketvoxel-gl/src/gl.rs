@@ -144,6 +144,13 @@ extern "C" {
     /// about a console's budget hands vitaGL no RAM pool at all — and it
     /// starts its splashscreen partway through init, so the failure that
     /// follows is a logo spinning forever with no way to ask why.
+    ///
+    /// **The `GLboolean` is not a success flag.** Every `vglInit*` ends with
+    /// `return res_fallback` (`vgl.c`): TRUE means "your requested resolution
+    /// did not fit and I substituted the maximum", so the ordinary successful
+    /// path returns **FALSE**. vitaGL's own samples ignore the value
+    /// entirely. Read [`vglMemFree`] to find out whether init actually
+    /// produced a usable context.
     pub fn vglInitWithCustomSizes(
         legacy_pool_size: c_int,
         width: c_int,
