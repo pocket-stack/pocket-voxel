@@ -205,9 +205,23 @@ impl Renderer {
     /// the index scan and the staging copy it would otherwise do for
     /// client-side arrays, and `sceGxmDraw` reads the cooked bytes directly.
     ///
+    /// Bytes the pak's pools need in vitaGL's RAM pool. Checked before the
+    /// upload rather than after, because `glBufferData` reports an exhausted
+    /// pool by leaving the buffer object empty — which draws as a world that
+    /// is simply not there, the hardest failure of all to read.
+    pub fn pool_bytes_needed(pak: &Pak) -> usize {
+        core::mem::size_of_val(pak.verts) + core::mem::size_of_val(pak.indices)
+    }
+
     /// # Safety
     /// A GL context must be current on the calling thread.
-    pub unsafe fn new(pak: &Pak) -> Self {
+    pub unsafe fn new(pak: &Pak) -> Result<Self, &'static str> {
+        let needed = Self::pool_bytes_needed(pak);
+        // A little headroom: vitaGL rounds allocations and the atlas cache
+        // draws from the same pool on the first frame.
+        if gl::vglMemFree(gl::VGL_MEM_RAM) < needed + 4 * 1024 * 1024 {
+            return Err("vitaGL RAM pool too small for the pak's vertex and index pools");
+        }
         let mut vert_vbo: GLuint = 0;
         let mut index_vbo: GLuint = 0;
         gl::glGenBuffers(1, &mut vert_vbo);
@@ -228,7 +242,7 @@ impl Renderer {
         );
         gl::glBindBuffer(gl::GL_ARRAY_BUFFER, 0);
         gl::glBindBuffer(gl::GL_ELEMENT_ARRAY_BUFFER, 0);
-        Self {
+        Ok(Self {
             vert_vbo,
             index_vbo,
             atlas: AtlasCache::new(),
@@ -241,7 +255,31 @@ impl Renderer {
             ui: Vec::new(),
             pull_verts_count: 0,
             draw_count: 0,
-        }
+        })
+    }
+
+    /// Paint one solid frame and present it.
+    ///
+    /// `glClear` runs vitaGL's PRECOMPILED clear shader, so this works even
+    /// when the runtime shader compiler is absent and no geometry can draw at
+    /// all. That is what lets the shell's boot stages report themselves as
+    /// colours on a console with no log and no memory-card access.
+    ///
+    /// # Safety
+    /// A GL context must be current, with no scene mid-draw.
+    pub unsafe fn paint(r: f32, g: f32, b: f32) {
+        gl::glClearColor(r, g, b, 1.0);
+        gl::glClearDepthf(1.0);
+        gl::glDepthMask(1);
+        gl::glClear(gl::GL_COLOR_BUFFER_BIT | gl::GL_DEPTH_BUFFER_BIT);
+        gl::vglSwapBuffers(0);
+    }
+
+    /// Whether vitaGL brought its runtime shader compiler up. False means
+    /// `libshacccg.suprx` is not installed: `glClear` still works, so the
+    /// screen is paintable, but no geometry can ever draw.
+    pub fn shader_compiler_online() -> bool {
+        unsafe { gl::is_shark_online != 0 }
     }
 
     /// Bytes of atlas texture currently resident (boot log / telemetry).

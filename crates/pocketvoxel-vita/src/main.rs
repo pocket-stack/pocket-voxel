@@ -124,13 +124,67 @@ extern "C" {
     fn sce_clib_printf(fmt: *const i8, ...) -> i32;
 }
 
-/// Park visibly rather than exiting: a VPK that returns from `main` drops
-/// the player back to LiveArea with no explanation, and the one thing worth
-/// knowing is in the log line above the park.
-fn halt(message: &str) -> ! {
-    log(format_args!("[voxelmon] FATAL: {message}"));
+/// Where the boot trail and any failure land. A console has no console: this
+/// directory is the only channel between a failed boot and the developer, and
+/// a VitaShell USB session is how it gets read.
+const DATA_DIR: &str = "ux0:data/voxelmon";
+
+/// Append one line to the boot trail. Every stage writes one, so a boot that
+/// dies anywhere leaves its last completed stage on the memory card.
+fn trail(line: &str) {
+    use std::io::Write as _;
+    log(format_args!("[voxelmon] {line}"));
+    let _ = std::fs::create_dir_all(DATA_DIR);
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(format!("{DATA_DIR}/boot.txt"))
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+/// Boot-stage colours. A console that fails before the first game frame has
+/// no other way to say what happened: there is no log a player can read, and
+/// a memory card needs a USB session and a working machine to inspect. So
+/// each stage owns a colour, and the screen IS the diagnosis.
+///
+/// `glClear` runs vitaGL's precompiled clear shader, so every one of these
+/// paints even on a console with no runtime shader compiler at all — which
+/// is precisely the case that used to be indistinguishable from a black
+/// screen.
+mod stage_color {
+    /// Past GL init, loading the game.
+    pub const BOOTING: (f32, f32, f32) = (0.04, 0.07, 0.22);
+    /// libshacccg.suprx is missing.
+    pub const NO_SHADER_COMPILER: (f32, f32, f32) = (0.45, 0.03, 0.03);
+    /// The pak file was not found.
+    pub const NO_PAK: (f32, f32, f32) = (0.50, 0.26, 0.0);
+    /// The pak was found but did not validate.
+    pub const BAD_PAK: (f32, f32, f32) = (0.38, 0.0, 0.38);
+    /// vitaGL could not hold the pak's pools.
+    pub const NO_VRAM: (f32, f32, f32) = (0.55, 0.55, 0.55);
+    /// The QuickJS guest failed to boot.
+    pub const GUEST_FAILED: (f32, f32, f32) = (0.0, 0.33, 0.40);
+}
+
+/// Park with the reason on screen, in the boot trail, and in its own file.
+/// Parking rather than exiting: a VPK that returns from `main` drops the
+/// player back to LiveArea with nothing to show for it.
+///
+/// Callable before GL exists — `painted` says whether a clear can reach the
+/// display yet, and before that the colour is simply skipped.
+fn fail(message: &str, color: (f32, f32, f32), painted: bool) -> ! {
+    trail(&format!("FATAL: {message}"));
+    let _ = std::fs::create_dir_all(DATA_DIR);
+    let _ = std::fs::write(format!("{DATA_DIR}/error.txt"), message);
     loop {
-        unsafe { sceKernelDelayThread(100_000) };
+        unsafe {
+            if painted {
+                vgl::Renderer::paint(color.0, color.1, color.2);
+            }
+            sceKernelDelayThread(100_000);
+        }
     }
 }
 
@@ -166,35 +220,6 @@ fn load_pak_blob() -> Option<&'static [u8]> {
     None
 }
 
-/// Where a HENkaku console keeps the runtime shader compiler. vitaGL builds
-/// its fixed-function shaders at runtime (build.rs `VITAGL_LIBS`), so this
-/// module is a prerequisite of drawing anything at all — and without the
-/// check, its absence looks exactly like a renderer bug: the VPK launches,
-/// the log is clean, and the screen stays black.
-///
-/// Written as an error file as well as a log line, because the one player
-/// who hits this is looking at a black screen with no way to read a log.
-const SHACCCG_PATHS: [&str; 3] = [
-    "ur0:data/libshacccg.suprx",
-    "ux0:data/libshacccg.suprx",
-    "vs0:sys/external/libshacccg.suprx",
-];
-
-fn require_shader_compiler() {
-    if SHACCCG_PATHS.iter().any(|p| std::fs::metadata(p).is_ok()) {
-        return;
-    }
-    let message = "libshacccg.suprx is not installed.\n\n\
-        Pocket Voxel renders through vitaGL, which builds its shaders on the \
-        console at runtime, so the PS Vita's own shader compiler module has \
-        to be present. Install it once with VitaDeploy or ShaccCgSetup (it \
-        extracts the module from a firmware update file); every vitaGL \
-        homebrew on the system needs the same module.\n";
-    let _ = std::fs::create_dir_all("ux0:data/voxelmon");
-    let _ = std::fs::write("ux0:data/voxelmon/error.txt", message);
-    halt(message);
-}
-
 /// The rung named by the build, or the weakest one if the name is not a rung
 /// (a typo must not silently ask for a picture this machine cannot hold).
 fn tier_code(name: &str) -> u8 {
@@ -203,7 +228,7 @@ fn tier_code(name: &str) -> u8 {
         "vita" => spec::quality_tier::VITA,
         "desktop" => spec::quality_tier::DESKTOP,
         _ => {
-            log(format_args!("[voxelmon] unknown tier {name:?}, using psp"));
+            trail(&format!("unknown tier {name:?}, using psp"));
             spec::quality_tier::PSP
         }
     }
@@ -214,15 +239,79 @@ fn main() {
 }
 
 unsafe fn run() {
+    // A fresh trail per boot: the interesting question is always what THIS
+    // launch did, and an appended history makes that the hard thing to read.
+    let _ = std::fs::create_dir_all(DATA_DIR);
+    let _ = std::fs::remove_file(format!("{DATA_DIR}/boot.txt"));
+    let _ = std::fs::remove_file(format!("{DATA_DIR}/error.txt"));
+    trail(&format!("boot: tier {TIER}, {} KB guest", APP_JS.len() / 1024));
+
+    // ---- graphics FIRST ----
+    // Before the pak, before QuickJS, before anything that can fail: once GL
+    // is up, `Renderer::paint` can put a colour on the panel, and every later
+    // failure stops being a black screen.
+    //
+    // The legacy (immediate-mode) pool stays small — this backend never uses
+    // glBegin/glEnd. The RAM threshold is what vitaGL LEAVES to newlib, which
+    // is where the 32 MB pak, the QuickJS heap and the CLUT expansion scratch
+    // all live.
+    if vgl::gl::vglInitExtended(
+        0x100000,
+        vgl::PHYSICAL_W,
+        vgl::PHYSICAL_H,
+        160 * 1024 * 1024,
+        vgl::gl::SCE_GXM_MULTISAMPLE_NONE,
+    ) == 0
+    {
+        // Nothing can paint if GL never came up; the card is the only channel.
+        fail("vglInit failed", stage_color::BOOTING, false);
+    }
+    vgl::gl::vglWaitVblankStart(1);
+    vgl::Renderer::paint(
+        stage_color::BOOTING.0,
+        stage_color::BOOTING.1,
+        stage_color::BOOTING.2,
+    );
+    trail(&format!(
+        "gl: {}x{}, {} KB in the RAM pool",
+        vgl::PHYSICAL_W,
+        vgl::PHYSICAL_H,
+        vgl::gl::vglMemFree(vgl::gl::VGL_MEM_RAM) / 1024,
+    ));
+
+    // vitaGL's OWN answer, not a guess at where the module lives: it probes
+    // vitaShaRK's default and `ur0:data/external/`, and a filesystem check
+    // that misses either would halt a console that works.
+    if !vgl::Renderer::shader_compiler_online() {
+        fail(
+            "libshacccg.suprx is not installed.\n\n\
+             Pocket Voxel renders through vitaGL, which builds its shaders on \
+             the console at runtime, so the PS Vita's own shader compiler \
+             module has to be present. Install it once with VitaDeploy or \
+             ShaccCgSetup (it extracts the module from a firmware update \
+             file); every vitaGL homebrew on the system needs the same \
+             module.\n",
+            stage_color::NO_SHADER_COMPILER,
+            true,
+        );
+    }
+    trail("gl: shader compiler online");
+    sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
+
+    // ---- the pak ----
     let Some(blob) = load_pak_blob() else {
-        halt("voxelmon.vxpak not found (app0: or ux0:data/voxelmon/)");
+        fail(
+            "voxelmon.vxpak not found (app0: or ux0:data/voxelmon/)",
+            stage_color::NO_PAK,
+            true,
+        );
     };
     let pak = match pak::read(blob) {
         Ok(p) => p,
-        Err(e) => halt(e),
+        Err(e) => fail(e, stage_color::BAD_PAK, true),
     };
-    log(format_args!(
-        "[voxelmon] pak: {} maps, {} chunks, {} verts, {} atlases, {} KB game",
+    trail(&format!(
+        "pak: {} maps, {} chunks, {} verts, {} atlases, {} KB game",
         pak.maps.len(),
         pak.chunks.len(),
         pak.verts.len(),
@@ -230,30 +319,12 @@ unsafe fn run() {
         pak.game.len() / 1024,
     ));
 
-    // ---- graphics ----
-    require_shader_compiler();
-    // The legacy (immediate-mode) pool stays small: this backend never uses
-    // glBegin/glEnd. The RAM threshold is what vitaGL LEAVES to newlib, and
-    // newlib is where the pak, the QuickJS heap and the CLUT expansion
-    // scratch live — 96 MB is comfortably more than all three.
-    if vgl::gl::vglInitExtended(
-        0x100000,
-        vgl::PHYSICAL_W,
-        vgl::PHYSICAL_H,
-        96 * 1024 * 1024,
-        vgl::gl::SCE_GXM_MULTISAMPLE_NONE,
-    ) == 0
-    {
-        halt("vglInit failed");
-    }
-    vgl::gl::vglWaitVblankStart(1);
-    sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
-
-    let mut renderer = vgl::Renderer::new(&pak);
-    log(format_args!(
-        "[voxelmon] gl: {}x{}, {} KB free in the RAM pool",
-        vgl::PHYSICAL_W,
-        vgl::PHYSICAL_H,
+    let mut renderer = match vgl::Renderer::new(&pak) {
+        Ok(r) => r,
+        Err(e) => fail(e, stage_color::NO_VRAM, true),
+    };
+    trail(&format!(
+        "gl: pools uploaded, {} KB left in the RAM pool",
         vgl::gl::vglMemFree(vgl::gl::VGL_MEM_RAM) / 1024,
     ));
 
@@ -266,7 +337,7 @@ unsafe fn run() {
     // The rung, before any op can reach the core. The guest never names it —
     // one bundle, many machines (voxel-spec.ts §quality ladder).
     scene.op(op::QUALITY, &[tier_code(TIER) as i32], None);
-    log(format_args!("[voxelmon] quality rung: {TIER}"));
+    trail(&format!("quality rung: {TIER}"));
     // The synth's output rate for the whole run, set before any audio op can
     // reach the core (changing it later drops what is playing, because every
     // event's span is measured in samples).
@@ -275,14 +346,15 @@ unsafe fn run() {
     // ---- QuickJS ----
     let rt = JS_NewRuntime();
     if rt.is_null() {
-        halt("JS_NewRuntime returned null");
+        fail("JS_NewRuntime returned null", stage_color::GUEST_FAILED, true);
     }
     let ctx = JS_NewContext(rt);
     if ctx.is_null() {
-        halt("JS_NewContext returned null");
+        fail("JS_NewContext returned null", stage_color::GUEST_FAILED, true);
     }
     let global = JS_GetGlobalObject(ctx);
     voxel::register(ctx, global);
+    trail("quickjs: realm up, evaluating the guest");
 
     let res = JS_Eval(
         ctx,
@@ -292,16 +364,24 @@ unsafe fn run() {
         JS_EVAL_TYPE_GLOBAL as i32,
     );
     if JS_ValueGetTag(res) == JS_TAG_EXCEPTION {
-        log_exception(ctx);
-        halt("JS_Eval threw");
+        let reason = exception_text(ctx);
+        fail(
+            &format!("the guest threw while booting: {reason}"),
+            stage_color::GUEST_FAILED,
+            true,
+        );
     }
     JS_FreeValue(ctx, res);
 
     let frame_fn = JS_GetPropertyStr(ctx, global, c"frame".as_ptr());
     if JS_IsUndefined(frame_fn) {
-        halt("globalThis.frame is undefined");
+        fail(
+            "globalThis.frame is undefined",
+            stage_color::GUEST_FAILED,
+            true,
+        );
     }
-    log(format_args!("[voxelmon] guest booted, entering the frame loop"));
+    trail("guest booted, entering the frame loop");
 
     let mut pad: SceCtrlData = core::mem::zeroed();
     let mut frame: u32 = 0;
@@ -342,6 +422,18 @@ unsafe fn run() {
         #[cfg(feature = "telemetry")]
         let t_work = sceKernelGetProcessTimeLow();
         renderer.render(&list, &pak);
+        // The first frames go in the boot trail with what they actually drew.
+        // "The guest is running and the screen is still empty" and "the guest
+        // never got here" look identical on the panel, and only this tells
+        // them apart.
+        if frame < 3 || frame == 60 {
+            trail(&format!(
+                "frame {frame}: {} items, {} draws, {} atlas KB",
+                list.items.len(),
+                renderer.draw_count,
+                renderer.atlas_bytes() / 1024,
+            ));
+        }
         // vglSwapBuffers ends the GXM scene, queues the flip and — with
         // vsync on — paces the loop. The audio pump then runs while the GPU
         // is still consuming this frame.
@@ -394,19 +486,27 @@ unsafe fn drain_jobs(rt: *mut JSRuntime, ctx: *mut JSContext) {
     }
 }
 
-unsafe fn log_exception(ctx: *mut JSContext) {
+/// Take the pending exception as text. The boot path puts it in the failure
+/// message — "the guest threw" without saying what is a round trip wasted.
+unsafe fn exception_text(ctx: *mut JSContext) -> String {
     let value = JS_GetException(ctx);
     let mut len: size_t = 0;
     let ptr = JS_ToCStringLen2(ctx, &mut len, value, 0);
-    if !ptr.is_null() {
+    let text = if ptr.is_null() {
+        String::from("unknown JavaScript exception")
+    } else {
         let bytes = core::slice::from_raw_parts(ptr as *const u8, len);
-        log(format_args!(
-            "[voxelmon] js: {}",
-            String::from_utf8_lossy(bytes)
-        ));
+        let text = String::from_utf8_lossy(bytes).into_owned();
         JS_FreeCString(ctx, ptr);
-    }
+        text
+    };
     JS_FreeValue(ctx, value);
+    text
+}
+
+unsafe fn log_exception(ctx: *mut JSContext) {
+    let text = exception_text(ctx);
+    log(format_args!("[voxelmon] js: {text}"));
 }
 
 // ---------------------------------------------------------------------------

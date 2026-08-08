@@ -153,6 +153,18 @@ extern "C" {
     pub fn vglMemFree(ty: c_int) -> usize;
 }
 
+extern "C" {
+    /// vitaGL's own runtime-shader-compiler status, set by
+    /// `start_shader_compiler()` during `vglInit*`. Not in vitaGL.h — it is a
+    /// plain global in `shared.h` — but it is the ONLY authoritative answer to
+    /// "can this console build shaders", and the alternative (probing the
+    /// filesystem for `libshacccg.suprx`) has to guess vitaGL's own search
+    /// list and gets it wrong: vitaGL tries vitaShaRK's default AND
+    /// `ur0:data/external/`, so a path check that misses one halts a console
+    /// that would have run.
+    pub static is_shark_online: GLboolean;
+}
+
 /// `vglMemType::VGL_MEM_RAM` — the pool the pak's VBOs and the atlas
 /// textures come out of.
 pub const VGL_MEM_RAM: c_int = 1;
