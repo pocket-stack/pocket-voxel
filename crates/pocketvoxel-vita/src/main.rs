@@ -251,15 +251,58 @@ unsafe fn run() {
     // is up, `Renderer::paint` can put a colour on the panel, and every later
     // failure stops being a black screen.
     //
-    // The legacy (immediate-mode) pool stays small — this backend never uses
-    // glBegin/glEnd. The RAM threshold is what vitaGL LEAVES to newlib, which
-    // is where the 32 MB pak, the QuickJS heap and the CLUT expansion scratch
-    // all live.
-    if vgl::gl::vglInitExtended(
-        0x100000,
+    // The budget is MEASURED, not assumed. vitaGL's `vglInitExtended` takes a
+    // "leave this much for newlib" threshold and clamps the result at zero,
+    // so a wrong guess about this console's budget silently hands it no RAM
+    // pool — and because vitaGL starts its splashscreen partway through init,
+    // that failure shows up as a logo spinning forever. Both numbers go in
+    // the boot trail BEFORE the call, so a hang inside it still leaves the
+    // budget on the memory card.
+    let free = vgl::gl::free_memory();
+    trail(&format!(
+        "mem: user {} MB, cdram {} MB, phycont {} MB",
+        free.size_user / 1048576,
+        free.size_cdram / 1048576,
+        free.size_phycont / 1048576,
+    ));
+    // What newlib keeps: the 32 MB pak, the QuickJS heap and the atlas
+    // expansion scratch, with room to spare.
+    const NEWLIB_RESERVE: i32 = 96 * 1024 * 1024;
+    // What vitaGL needs: the pak's pools (~24 MB), the atlas cache (24 MB),
+    // the circular pool every client-array draw stages through, and slack.
+    const GL_POOL_WANT: i32 = 96 * 1024 * 1024;
+    const GL_POOL_MIN: i32 = 48 * 1024 * 1024;
+    let ram_pool = (free.size_user - NEWLIB_RESERVE).min(GL_POOL_WANT);
+    if ram_pool < GL_POOL_MIN {
+        fail(
+            &format!(
+                "not enough memory: {} MB free, which leaves {} MB for the \
+                 renderer after the game's own {} MB",
+                free.size_user / 1048576,
+                ram_pool / 1048576,
+                NEWLIB_RESERVE / 1048576,
+            ),
+            stage_color::NO_VRAM,
+            false,
+        );
+    }
+    trail(&format!("gl: asking for a {} MB RAM pool", ram_pool / 1048576));
+    // The scratch pool every client-array draw stages through. A pulled grass
+    // mesh is the largest single stage (tens of thousands of 16-byte
+    // vertices) and vitaGL guarantees three frames of lifetime, so 8 MB is
+    // several times the worst frame — and far below the 32 MB default this
+    // machine has better uses for.
+    vgl::gl::vglSetCircularPoolSize(8 * 1024 * 1024);
+    if vgl::gl::vglInitWithCustomSizes(
+        // The legacy (immediate-mode) pool: this backend never uses
+        // glBegin/glEnd, so it only has to be non-zero.
+        64 * 1024,
         vgl::PHYSICAL_W,
         vgl::PHYSICAL_H,
-        160 * 1024 * 1024,
+        ram_pool,
+        free.size_cdram,
+        0,
+        0,
         vgl::gl::SCE_GXM_MULTISAMPLE_NONE,
     ) == 0
     {

@@ -138,15 +138,25 @@ extern "C" {
     pub fn glDrawArrays(mode: GLenum, first: GLint, count: GLsizei);
     pub fn glDrawElements(mode: GLenum, count: GLsizei, ty: GLenum, indices: *const c_void);
 
-    /// `vglInitExtended(legacy_pool, width, height, ram_threshold, msaa)`.
-    /// `ram_threshold` is RAM vitaGL LEAVES to newlib, not what it takes.
-    pub fn vglInitExtended(
+    /// Pool sizes stated outright, rather than `vglInitExtended`'s
+    /// "threshold" (RAM to LEAVE for newlib). The threshold form computes
+    /// `free_user - threshold` and **clamps at zero**, so one wrong guess
+    /// about a console's budget hands vitaGL no RAM pool at all — and it
+    /// starts its splashscreen partway through init, so the failure that
+    /// follows is a logo spinning forever with no way to ask why.
+    pub fn vglInitWithCustomSizes(
         legacy_pool_size: c_int,
         width: c_int,
         height: c_int,
-        ram_threshold: c_int,
+        ram_pool_size: c_int,
+        cdram_pool_size: c_int,
+        phycont_pool_size: c_int,
+        cdlg_pool_size: c_int,
         msaa: c_int,
     ) -> GLboolean;
+    /// Size of the scratch pool every client-array draw stages through. Must
+    /// precede `vglInit*`.
+    pub fn vglSetCircularPoolSize(size: u32);
     pub fn vglSwapBuffers(has_commondialog: GLboolean);
     pub fn vglWaitVblankStart(enable: GLboolean);
     /// Free bytes in one internal pool (`vglMemType`); 1 = `VGL_MEM_RAM`.
@@ -176,3 +186,30 @@ extern "C" {
 /// `vglMemType::VGL_MEM_RAM` — the pool the pak's VBOs and the atlas
 /// textures come out of.
 pub const VGL_MEM_RAM: c_int = 1;
+
+/// What the kernel will still hand out, by partition. `size` is an in-out
+/// field: set it to the struct's own size before the call.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FreeMemorySize {
+    pub size: c_int,
+    pub size_user: c_int,
+    pub size_cdram: c_int,
+    pub size_phycont: c_int,
+}
+
+extern "C" {
+    pub fn sceKernelGetFreeMemorySize(info: *mut FreeMemorySize) -> c_int;
+}
+
+/// This application's free memory, by partition.
+pub fn free_memory() -> FreeMemorySize {
+    let mut info = FreeMemorySize {
+        size: core::mem::size_of::<FreeMemorySize>() as c_int,
+        ..FreeMemorySize::default()
+    };
+    unsafe {
+        sceKernelGetFreeMemorySize(&mut info);
+    }
+    info
+}
