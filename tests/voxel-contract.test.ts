@@ -23,6 +23,7 @@ import {
   VXPK_META_SIZE,
   VXPK_TAG,
 } from "../contracts/spec/voxel-spec.ts";
+import { RecorderHost } from "../voxelmon/game/host.ts";
 
 const root = join(import.meta.dir, "..");
 
@@ -37,6 +38,17 @@ test("op codes are unique and never use 0", () => {
   const codes = Object.values(VOX_OP);
   expect(new Set(codes).size).toBe(codes.length);
   expect(codes.includes(0 as never)).toBe(false);
+});
+
+test("RecorderHost preserves every uiLabel numeric arg before its JSON string", () => {
+  const host = new RecorderHost();
+  host.uiRect(1, 2, 3, 4, 0xff112233);
+  host.uiLabel(5, 6, 2, 0xffaabbcc, "PC: A/B");
+  host.frameDone(0, 0);
+  expect(host.text()).toContain(`o ${VOX_OP.uiRect} 1 2 3 4 ${0xff112233 | 0}`);
+  expect(host.text()).toContain(
+    `s ${VOX_OP.uiLabel} 5 6 2 ${0xffaabbcc | 0} "PC: A/B"`,
+  );
 });
 
 // The quality ladder's structural rules. Every one of these is a claim the

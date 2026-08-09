@@ -1,4 +1,5 @@
-//! The GB UI tile layer → screen-space [`Item::UiQuad`]s.
+//! Screen-space UI draw-list construction: the scaled GB tile layer followed
+//! by the native-pixel rectangle/5x7-label overlay.
 //!
 //! The 160x144 GB frame scales to fit 480x272 by height: **scale = VIEW_H /
 //! GB_H = 272/144 ≈ 1.8889**, centered horizontally (the scaled UI is
@@ -19,7 +20,7 @@ use alloc::vec::Vec;
 
 use crate::draw::Item;
 use crate::pak::Pak;
-use crate::scene::Scene;
+use crate::scene::{Scene, UI_OVERLAY_RECTS_MAX, UiOverlayItem};
 use crate::spec::{GB_H, GB_W, TILE_PX, UI_COLS, UI_ROWS, VIEW_H, VIEW_W, atlas_kind};
 
 /// GB → screen scale, pinned (see module docs).
@@ -82,6 +83,275 @@ pub fn append_ui(scene: &Scene, pak: &Pak, items: &mut Vec<Item>) {
     }
 }
 
+/// A compact transparent-background 5x7 font. Rows use five bits, MSB on
+/// the left. Lowercase is deliberately folded to uppercase: the overlay is
+/// a tiny system UI primitive, not the game's cooked GB charmap.
+fn glyph(ch: char) -> [u8; 7] {
+    let ch = if matches!(ch, 'é' | 'É') {
+        'E'
+    } else {
+        ch.to_ascii_uppercase()
+    };
+    match ch {
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'B' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+        'C' => [
+            0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111,
+        ],
+        'D' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'G' => [
+            0b01111, 0b10000, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'I' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+        ],
+        'J' => [
+            0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100,
+        ],
+        'K' => [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ],
+        'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+        'M' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'P' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'Q' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'S' => [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'U' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'V' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010,
+        ],
+        'X' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ],
+        'Y' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'Z' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
+        ],
+        '0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
+        '3' => [
+            0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        '4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110,
+        ],
+        '6' => [
+            0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110,
+        ],
+        ' ' => [0; 7],
+        '.' => [0, 0, 0, 0, 0, 0b00110, 0b00110],
+        ',' => [0, 0, 0, 0, 0b00110, 0b00110, 0b00100],
+        ':' => [0, 0b00110, 0b00110, 0, 0b00110, 0b00110, 0],
+        ';' => [0, 0b00110, 0b00110, 0, 0b00110, 0b00110, 0b00100],
+        '!' => [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0, 0b00100],
+        '?' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0, 0b00100],
+        '-' => [0, 0, 0, 0b11111, 0, 0, 0],
+        '_' => [0, 0, 0, 0, 0, 0, 0b11111],
+        '+' => [0, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0],
+        '=' => [0, 0b11111, 0, 0b11111, 0, 0, 0],
+        '/' => [0b00001, 0b00010, 0b00100, 0b00100, 0b01000, 0b10000, 0],
+        '\\' => [0b10000, 0b01000, 0b00100, 0b00100, 0b00010, 0b00001, 0],
+        '\'' => [0b00100, 0b00100, 0b00010, 0, 0, 0, 0],
+        '"' => [0b01010, 0b01010, 0b00100, 0, 0, 0, 0],
+        '(' => [
+            0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010,
+        ],
+        ')' => [
+            0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000,
+        ],
+        '[' => [
+            0b01110, 0b01000, 0b01000, 0b01000, 0b01000, 0b01000, 0b01110,
+        ],
+        ']' => [
+            0b01110, 0b00010, 0b00010, 0b00010, 0b00010, 0b00010, 0b01110,
+        ],
+        '<' => [
+            0b00010, 0b00100, 0b01000, 0b10000, 0b01000, 0b00100, 0b00010,
+        ],
+        '>' => [
+            0b01000, 0b00100, 0b00010, 0b00001, 0b00010, 0b00100, 0b01000,
+        ],
+        '@' => [
+            0b01110, 0b10001, 0b10111, 0b10101, 0b10111, 0b10000, 0b01110,
+        ],
+        '#' => [
+            0b01010, 0b11111, 0b01010, 0b01010, 0b11111, 0b01010, 0b01010,
+        ],
+        '&' => [
+            0b01100, 0b10010, 0b10100, 0b01000, 0b10101, 0b10010, 0b01101,
+        ],
+        '%' => [0b11001, 0b11010, 0b00100, 0b01000, 0b10110, 0b00110, 0],
+        '*' => [0, 0b10101, 0b01110, 0b11111, 0b01110, 0b10101, 0],
+        '|' => [0b00100; 7],
+        '$' => [
+            0b00100, 0b01111, 0b10100, 0b01110, 0b00101, 0b11110, 0b00100,
+        ],
+        '^' => [0b00100, 0b01010, 0b10001, 0, 0, 0, 0],
+        _ => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0, 0b00100],
+    }
+}
+
+fn push_overlay_rect(
+    items: &mut Vec<Item>,
+    emitted: &mut usize,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    abgr: u32,
+) {
+    if *emitted >= UI_OVERLAY_RECTS_MAX {
+        return;
+    }
+    let x0 = x.clamp(0, VIEW_W);
+    let y0 = y.clamp(0, VIEW_H);
+    let x1 = x.saturating_add(w.max(0)).clamp(0, VIEW_W);
+    let y1 = y.saturating_add(h.max(0)).clamp(0, VIEW_H);
+    if x1 > x0 && y1 > y0 {
+        items.push(Item::OverlayRect {
+            x: x0,
+            y: y0,
+            w: x1 - x0,
+            h: y1 - y0,
+            abgr,
+        });
+        *emitted += 1;
+    }
+}
+
+/// Append retained overlay commands after the complete GB layer. Labels are
+/// expanded into row runs (not one quad per pixel), then every backend can
+/// consume one ordered, texture-free rectangle stream.
+pub fn append_overlay(scene: &Scene, items: &mut Vec<Item>) {
+    let mut emitted = 0usize;
+    for command in &scene.ui_overlay {
+        if emitted >= UI_OVERLAY_RECTS_MAX {
+            break;
+        }
+        match command {
+            UiOverlayItem::Rect(rect) => push_overlay_rect(
+                items,
+                &mut emitted,
+                rect.x,
+                rect.y,
+                rect.w,
+                rect.h,
+                rect.abgr,
+            ),
+            UiOverlayItem::Label(label) => {
+                let mut pen_x = label.x;
+                let mut pen_y = label.y;
+                for ch in label.text.chars() {
+                    if emitted >= UI_OVERLAY_RECTS_MAX {
+                        break;
+                    }
+                    if ch == '\n' {
+                        pen_x = label.x;
+                        pen_y = pen_y.saturating_add(8 * label.scale);
+                        continue;
+                    }
+                    if ch == '\r' {
+                        continue;
+                    }
+                    if ch == '\t' {
+                        pen_x = pen_x.saturating_add(24 * label.scale);
+                        continue;
+                    }
+                    for (row, bits) in glyph(ch).into_iter().enumerate() {
+                        let mut col = 0i32;
+                        while col < 5 {
+                            if bits & (1 << (4 - col)) == 0 {
+                                col += 1;
+                                continue;
+                            }
+                            let start = col;
+                            while col < 5 && bits & (1 << (4 - col)) != 0 {
+                                col += 1;
+                            }
+                            push_overlay_rect(
+                                items,
+                                &mut emitted,
+                                pen_x.saturating_add(start * label.scale),
+                                pen_y.saturating_add(row as i32 * label.scale),
+                                (col - start) * label.scale,
+                                label.scale,
+                                label.abgr,
+                            );
+                            if emitted >= UI_OVERLAY_RECTS_MAX {
+                                break;
+                            }
+                        }
+                    }
+                    pen_x = pen_x.saturating_add(6 * label.scale);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +391,34 @@ mod tests {
         assert_eq!(count(&s), 1 + 3);
         s.op(op::UI_CLEAR, &[], None);
         assert_eq!(count(&s), 0);
+    }
+
+    #[test]
+    fn overlay_labels_expand_to_ordered_clipped_runs() {
+        let mut s = Scene::new();
+        s.op(op::UI_RECT, &[-4, 3, 8, 9, 0x4433_2211], None);
+        s.op(op::UI_LABEL, &[4, 5, 2, -1], Some("a-?"));
+        let mut items = Vec::new();
+        append_overlay(&s, &mut items);
+        assert_eq!(
+            items[0],
+            Item::OverlayRect {
+                x: 0,
+                y: 3,
+                w: 4,
+                h: 9,
+                abgr: 0x4433_2211,
+            }
+        );
+        assert!(items[1..].iter().all(|item| matches!(
+            item,
+            Item::OverlayRect {
+                abgr: 0xffff_ffff,
+                ..
+            }
+        )));
+        assert_eq!(glyph('a'), glyph('A'));
+        assert_eq!(glyph('é'), glyph('E'));
+        assert_ne!(glyph('-'), [0; 7]);
     }
 }

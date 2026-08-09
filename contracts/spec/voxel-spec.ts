@@ -522,6 +522,10 @@ export const EMOTE = {
 //                                          into the grid via uiTile instead
 //     uiReveal(n)                          glyphs of the last uiText shown
 //     uiClear()
+//   overlay (retained screen-space pixels, composited after the GB ui)
+//     uiRect(x, y, w, h, abgr)             append a solid screen-pixel rect
+//     uiLabel(x, y, scale, abgr, str)      STRING arg; transparent 5x7 font
+//     uiOverlayClear()                     clear every retained overlay item
 //   battle
 //     arena(mapId, x, y, shape, rig)       stage at cell (x,y); ARENA_SHAPE,
 //                                          rig = 0 tele, 1 wide
@@ -612,6 +616,9 @@ export const VOX_OP = {
   uiText: 52,
   uiReveal: 53,
   uiClear: 54,
+  uiRect: 55,
+  uiLabel: 56,
+  uiOverlayClear: 57,
 
   arena: 70,
   card: 71,

@@ -4,7 +4,7 @@
 //! applies synchronously into the shared retained [`Scene`] (the core's
 //! dispatch is defensive by contract, so a hostile guest can at worst
 //! no-op); `gamedata()` returns the pak's GAME JSON as a JS string;
-//! `uiText` carries the one string argument.
+//! `uiText` and `uiLabel` carry one string argument each.
 //!
 //! Single-threaded host (the QuickJS worker) — `static mut` matches the
 //! established hosts/psp style.
@@ -172,6 +172,8 @@ op_fn!(js_ui_tile, op::UI_TILE, 3);
 op_fn!(js_ui_fill, op::UI_FILL, 5);
 op_fn!(js_ui_reveal, op::UI_REVEAL, 1);
 op_fn!(js_ui_clear, op::UI_CLEAR, 0);
+op_fn!(js_ui_rect, op::UI_RECT, 5);
+op_fn!(js_ui_overlay_clear, op::UI_OVERLAY_CLEAR, 0);
 op_fn!(js_arena, op::ARENA, 5);
 op_fn!(js_card, op::CARD, 4);
 op_fn!(js_card_hide, op::CARD_HIDE, 1);
@@ -237,27 +239,48 @@ unsafe extern "C" fn js_stats(
     JS_UNDEFINED
 }
 
-/// `uiText(x, y, str)` — the one string-bearing op.
+unsafe fn dispatch_string<const N: usize>(
+    ctx: *mut JSContext,
+    argc: i32,
+    argv: *mut JSValue,
+    code: u32,
+) -> JSValue {
+    if argc < N as i32 + 1 {
+        return JS_UNDEFINED;
+    }
+    let mut args = [0i32; N];
+    for (i, arg) in args.iter_mut().enumerate() {
+        *arg = arg_i32(ctx, argc, argv, i as isize);
+    }
+    let mut len: size_t = 0;
+    let s = JS_ToCStringLen2(ctx, &mut len, *argv.offset(N as isize), 0);
+    if !s.is_null() {
+        if let Ok(text) = core::str::from_utf8(core::slice::from_raw_parts(s as *const u8, len)) {
+            scene().op(code, &args, Some(text));
+        }
+        JS_FreeCString(ctx, s);
+    }
+    JS_UNDEFINED
+}
+
+/// `uiText(x, y, str)` — GB-charmap string op.
 unsafe extern "C" fn js_ui_text(
     ctx: *mut JSContext,
     _this: JSValue,
     argc: i32,
     argv: *mut JSValue,
 ) -> JSValue {
-    if argc < 3 {
-        return JS_UNDEFINED;
-    }
-    let x = arg_i32(ctx, argc, argv, 0);
-    let y = arg_i32(ctx, argc, argv, 1);
-    let mut len: size_t = 0;
-    let s = JS_ToCStringLen2(ctx, &mut len, *argv.offset(2), 0);
-    if !s.is_null() {
-        if let Ok(text) = core::str::from_utf8(core::slice::from_raw_parts(s as *const u8, len)) {
-            scene().op(op::UI_TEXT, &[x, y], Some(text));
-        }
-        JS_FreeCString(ctx, s);
-    }
-    JS_UNDEFINED
+    dispatch_string::<2>(ctx, argc, argv, op::UI_TEXT)
+}
+
+/// `uiLabel(x, y, scale, abgr, str)` — native-pixel 5x7 overlay string op.
+unsafe extern "C" fn js_ui_label(
+    ctx: *mut JSContext,
+    _this: JSValue,
+    argc: i32,
+    argv: *mut JSValue,
+) -> JSValue {
+    dispatch_string::<4>(ctx, argc, argv, op::UI_LABEL)
 }
 
 /// Autopilot-only guest profiling channel (never in a shipped build; the
@@ -321,6 +344,9 @@ pub unsafe fn register(ctx: *mut JSContext, global: JSValue) {
     add_fn(ctx, obj, b"uiText\0", js_ui_text, 3);
     add_fn(ctx, obj, b"uiReveal\0", js_ui_reveal, 1);
     add_fn(ctx, obj, b"uiClear\0", js_ui_clear, 0);
+    add_fn(ctx, obj, b"uiRect\0", js_ui_rect, 5);
+    add_fn(ctx, obj, b"uiLabel\0", js_ui_label, 5);
+    add_fn(ctx, obj, b"uiOverlayClear\0", js_ui_overlay_clear, 0);
     add_fn(ctx, obj, b"arena\0", js_arena, 5);
     add_fn(ctx, obj, b"card\0", js_card, 4);
     add_fn(ctx, obj, b"cardHide\0", js_card_hide, 1);

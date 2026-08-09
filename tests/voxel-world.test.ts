@@ -15,6 +15,7 @@ import { join } from "node:path";
 
 import { VOX_BTN, VOX_OP } from "../contracts/spec/voxel-spec.ts";
 import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
+import { newMon } from "../voxelmon/game/battle/mon.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
 import { seqRng } from "../voxelmon/game/rng.ts";
 import { ENCOUNTER_BUCKETS } from "../voxelmon/game/rules/encounter.ts";
@@ -66,6 +67,19 @@ function walk(game: VoxelmonGame, mask: number, cells: number, maxTicks = 2000):
 
 function idle(game: VoxelmonGame, ticks: number): void {
   for (let i = 0; i < ticks; i++) game.tick(0);
+}
+
+function tap(game: VoxelmonGame, mask: number): void {
+  game.tick(mask);
+  game.tick(0);
+}
+
+function openBedroomPcChoice(game: VoxelmonGame): void {
+  game.overworld.setMap("REDS_HOUSE_2F", 0, 2, "up");
+  game.overworld.refreshStandingOnWarp();
+  tap(game, VOX_BTN.a);
+  idle(game, 180);
+  expect(game.stackKinds()).toEqual(["overworld", "textbox", "choice"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +303,97 @@ describe("movement", () => {
     expect([p.cellX, p.cellY]).toEqual([3, 6]);
     expect(p.bumpFrames).toBeGreaterThan(0); // wall-bonk walk-in-place
     expect(p.walkPhase()).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Layer 2 — Red's bedroom PC hidden event + native modal desktop
+// ---------------------------------------------------------------------------
+
+describe("bedroom computer", () => {
+  test.skipIf(!hasGen)("only the ROM pcTile coordinate and facing open the native choice", () => {
+    const game = makeGame();
+    game.overworld.setMap("REDS_HOUSE_2F", 0, 2, "right");
+    tap(game, VOX_BTN.a);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+
+    game.overworld.setMap("REDS_HOUSE_2F", 1, 2, "up");
+    tap(game, VOX_BTN.a);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+
+    openBedroomPcChoice(game);
+    const choice = game.uiChoice();
+    expect(choice?.labels).toEqual(["LOCAL PC", "REMOTE PC"]);
+    expect(choice?.selected).toBe(0);
+  });
+
+  test.skipIf(!hasGen)("local PC opens a coloured retained overlay with mock operations and closes", () => {
+    const host = new RecorderHost();
+    const game = new VoxelmonGame(romData!, host, 1);
+    game.newGame();
+    openBedroomPcChoice(game);
+
+    tap(game, VOX_BTN.a); // LOCAL PC
+    idle(game, 15); // native ChoiceBox answer hold
+    expect(game.stackKinds()).toEqual(["overworld", "pc-desktop"]);
+    expect(game.pcDesktop()).toMatchObject({ page: "home", selected: 0, status: "4 OBJECTS" });
+    expect(host.text()).toContain(`o ${VOX_OP.uiRect} `);
+    expect(host.text()).toContain(`s ${VOX_OP.uiLabel} `);
+
+    const p = game.overworld.player;
+    const parked = [p.cellX, p.cellY, p.landedCount];
+    tap(game, VOX_BTN.down); // BOX NETWORK
+    tap(game, VOX_BTN.a);
+    expect(game.pcDesktop()).toMatchObject({ page: "storage", boxNumber: 1 });
+    tap(game, VOX_BTN.right);
+    expect(game.pcDesktop()).toMatchObject({ page: "storage", boxNumber: 2 });
+    tap(game, VOX_BTN.a);
+    expect(game.pcDesktop()?.status).toBe("BOX 02 SYNC COMPLETE");
+    expect([p.cellX, p.cellY, p.landedCount]).toEqual(parked); // world stayed frozen
+
+    tap(game, VOX_BTN.b); // child page -> desktop
+    expect(game.pcDesktop()).toMatchObject({ page: "home" });
+    tap(game, VOX_BTN.b); // desktop -> overworld
+    expect(game.stackKinds()).toEqual(["overworld"]);
+    expect(game.pcDesktop()).toBeNull();
+    expect(host.text().match(new RegExp(`o ${VOX_OP.uiOverlayClear}(?:\\n|$)`, "g"))?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test.skipIf(!hasGen)("storage scrolls a full party so the selected sixth row stays visible", () => {
+    const host = new RecorderHost();
+    const game = new VoxelmonGame(romData!, host, 1);
+    game.newGame();
+    game.save.party = Array.from({ length: 6 }, (_, i) => ({
+      ...newMon(romData!, "SQUIRTLE", 5),
+      nickname: `MON${i + 1}`,
+    }));
+    openBedroomPcChoice(game);
+    tap(game, VOX_BTN.a);
+    idle(game, 15);
+    tap(game, VOX_BTN.down); // BOX NETWORK
+    tap(game, VOX_BTN.a);
+    for (let i = 0; i < 5; i++) tap(game, VOX_BTN.down);
+
+    expect(game.pcDesktop()).toMatchObject({ page: "storage", selected: 5 });
+    expect(host.text()).toContain("MON6  L5");
+  });
+
+  test.skipIf(!hasGen)("remote PC reports offline in native dialogue and never falls back local", () => {
+    const game = makeGame();
+    openBedroomPcChoice(game);
+    tap(game, VOX_BTN.down);
+    expect(game.uiChoice()?.selected).toBe(1);
+    tap(game, VOX_BTN.a);
+    idle(game, 15);
+
+    expect(game.stackKinds()).toEqual(["overworld", "textbox"]);
+    expect(game.pcDesktop()).toBeNull();
+    const text = game
+      .uiBox()!
+      .box.pages.flatMap((page) => page.lines)
+      .join(" ");
+    expect(text).toContain("remote PC");
+    expect(text).toContain("online");
   });
 });
 

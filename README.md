@@ -28,9 +28,10 @@ Pocket Voxel is a specialized runtime of
 split inverted: **the game state lives in the guest** (world, battle, script
 VM, menus, saves — every formula cites the Lua it ports), and the Rust core
 owns only the retained scene — cooked voxel chunks, entity billboards, camera
-rungs, the battle stage, a GB UI tile layer, and the chip synth that renders
-the ROM's own sound programs to PCM. Steady-state boundary traffic is a few
-ops per tick against a measured QuickJS budget of ~8k ops per frame.
+rungs, the battle stage, a GB UI tile layer, a bounded native-pixel colour
+overlay, and the chip synth that renders the ROM's own sound programs to PCM.
+Steady-state boundary traffic is a few ops per tick against a measured QuickJS
+budget of ~8k ops per frame.
 
 ## You bring the ROM
 

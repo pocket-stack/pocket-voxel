@@ -14,6 +14,7 @@ import { desiredCards, type BattleStaging } from "./battle/staging.ts";
 import type { BattleUi } from "./battle/ui.ts";
 import type { VoxelmonData } from "./data.ts";
 import type { VoxelHost } from "./host.ts";
+import { emitPcDesktop, type PcDesktopSource } from "./ui/pc-desktop.ts";
 import { computeNeighbors, type Overworld } from "./world/overworld.ts";
 import { NPC } from "./world/npc.ts";
 import type { Textbox } from "./world/textbox.ts";
@@ -51,7 +52,8 @@ export interface UiBoxSource {
 }
 
 export interface ChoiceSource {
-  yes: boolean;
+  labels: readonly string[];
+  selected: number;
 }
 
 /** The battle state the scene stages and draws (game.ts's battle state). */
@@ -83,6 +85,8 @@ export interface SceneView {
   uiBox(): UiBoxSource | null;
   /** Topmost YES/NO choice, if any (drawn over its parent box). */
   uiChoice(): ChoiceSource | null;
+  /** Topmost bedroom-PC desktop, if any (screen-space native overlay). */
+  pcDesktop(): PcDesktopSource | null;
   /** The active battle, if any — the scene then stages the arena and hands
    * the GB tile layer to the battle ui. */
   battleView(): BattleSceneView | null;
@@ -133,7 +137,14 @@ export class Scene {
   private uiPage = -1;
   private uiArrow = false;
   private choiceDrawn = false;
-  private choiceYes = true;
+  private choiceSelected = 0;
+  private choiceLabels = "";
+  private choiceX = 0;
+  private choiceY = 0;
+  private choiceW = 0;
+  private choiceH = 0;
+  private pcOwner: PcDesktopSource | null = null;
+  private pcRevision = -1;
   // battle staging deltas (docs/VOXEL.md §4 battle ops)
   private battleActive = false;
   private arenaStaged = false;
@@ -172,6 +183,7 @@ export class Scene {
       this.endBattle();
     }
     this.emitUi(view);
+    this.emitPcOverlay(view);
     if (p) p.ui += p.now() - t2;
   }
 
@@ -525,40 +537,69 @@ export class Scene {
       }
       this.uiArrow = arrow;
     }
-    // YES/NO window over the still-visible text (Commands.lua ask ->
-    // TextBox opts.choice). Placement approximates the reference ChoiceBox
-    // (anchored above the dialogue box, right side).
+    // Choice window over the still-visible text (Commands.lua ask -> TextBox
+    // opts.choice). YES/NO remains byte-for-byte the old 6x5 window; callers
+    // may supply wider labels such as LOCAL PC / REMOTE PC.
     if (choice) {
-      if (!this.choiceDrawn) {
+      const labels = choice.labels.slice(0, 4);
+      const labelsKey = labels.join("\u0000");
+      const cw = Math.min(20, Math.max(...labels.map((s) => encodeGlyphs(s).length)) + 3);
+      const ch = labels.length * 2 + 1;
+      const cx = 20 - cw;
+      const cy = 7;
+      if (!this.choiceDrawn || labelsKey !== this.choiceLabels) {
+        if (this.choiceDrawn) {
+          host.uiFill(this.choiceX, this.choiceY, this.choiceW, this.choiceH, 0);
+        }
         this.choiceDrawn = true;
-        this.choiceYes = choice.yes;
-        const cx = 14;
-        const cy = 7;
+        this.choiceSelected = choice.selected;
+        this.choiceLabels = labelsKey;
+        this.choiceX = cx;
+        this.choiceY = cy;
+        this.choiceW = cw;
+        this.choiceH = ch;
         host.uiTile(cx, cy, BORDER_TL);
-        host.uiFill(cx + 1, cy, 4, 1, BORDER_H);
-        host.uiTile(cx + 5, cy, BORDER_TR);
-        host.uiFill(cx, cy + 1, 1, 3, BORDER_V);
-        host.uiFill(cx + 5, cy + 1, 1, 3, BORDER_V);
-        host.uiTile(cx, cy + 4, BORDER_BL);
-        host.uiFill(cx + 1, cy + 4, 4, 1, BORDER_H);
-        host.uiTile(cx + 5, cy + 4, BORDER_BR);
-        host.uiFill(cx + 1, cy + 1, 4, 3, SPACE);
+        host.uiFill(cx + 1, cy, cw - 2, 1, BORDER_H);
+        host.uiTile(cx + cw - 1, cy, BORDER_TR);
+        host.uiFill(cx, cy + 1, 1, ch - 2, BORDER_V);
+        host.uiFill(cx + cw - 1, cy + 1, 1, ch - 2, BORDER_V);
+        host.uiTile(cx, cy + ch - 1, BORDER_BL);
+        host.uiFill(cx + 1, cy + ch - 1, cw - 2, 1, BORDER_H);
+        host.uiTile(cx + cw - 1, cy + ch - 1, BORDER_BR);
+        host.uiFill(cx + 1, cy + 1, cw - 2, ch - 2, SPACE);
         // static labels go into the grid, never through uiText (voxel-spec
         // §ui): a uiText here would take the live run away from the dialogue
         // row typing underneath it
-        this.stamp(host, cx + 2, cy + 1, "YES");
-        this.stamp(host, cx + 2, cy + 3, "NO");
-        host.uiTile(cx + 1, choice.yes ? cy + 1 : cy + 3, ARROW_CURSOR);
-      } else if (choice.yes !== this.choiceYes) {
-        this.choiceYes = choice.yes;
-        host.uiTile(15, choice.yes ? 10 : 8, SPACE);
-        host.uiTile(15, choice.yes ? 8 : 10, ARROW_CURSOR);
+        labels.forEach((text, i) => this.stamp(host, cx + 2, cy + 1 + i * 2, text));
+        host.uiTile(cx + 1, cy + 1 + choice.selected * 2, ARROW_CURSOR);
+      } else if (choice.selected !== this.choiceSelected) {
+        host.uiTile(cx + 1, cy + 1 + this.choiceSelected * 2, SPACE);
+        this.choiceSelected = choice.selected;
+        host.uiTile(cx + 1, cy + 1 + choice.selected * 2, ARROW_CURSOR);
       }
     } else if (this.choiceDrawn) {
       // the parent box usually pops with the choice; clear just the window
       // in case it lingers (tile 0 = unset)
-      host.uiFill(14, 7, 6, 5, 0);
+      host.uiFill(this.choiceX, this.choiceY, this.choiceW, this.choiceH, 0);
       this.choiceDrawn = false;
+      this.choiceLabels = "";
     }
+  }
+
+  private emitPcOverlay(view: SceneView): void {
+    const source = view.pcDesktop();
+    if (!source) {
+      if (this.pcOwner) {
+        this.host.uiOverlayClear();
+        this.pcOwner = null;
+        this.pcRevision = -1;
+      }
+      return;
+    }
+    if (source === this.pcOwner && source.revision === this.pcRevision) return;
+    this.host.uiOverlayClear();
+    emitPcDesktop(this.host, source);
+    this.pcOwner = source;
+    this.pcRevision = source.revision;
   }
 }

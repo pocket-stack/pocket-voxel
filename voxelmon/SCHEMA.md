@@ -191,7 +191,7 @@ line-oriented, `dist/voxelmon/trace/<name>.vtrace`:
 voxtrace 1
 t <tick> <buttons>          # starts a tick; buttons = VOX_BTN mask that tick
 o <code> <i32> <i32> ...    # one op, numeric args in order
-s <code> <i32> <i32> <json-string>   # the op forms carrying a string arg
+s <code> <i32> ... <json-string>      # numeric args then a string arg
 m <name>                    # checkpoint marker: sim renders + hashes here
 ```
 

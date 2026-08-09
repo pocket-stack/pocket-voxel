@@ -1,7 +1,8 @@
 //! The retained scene the guest drives through `voxel` surface ops
 //! (contracts/spec/voxel-spec.ts §Ops). Presentation state only — zero
 //! gameplay: map slots, camera, pitch tween, tint, stamp toggles, entity
-//! billboards, the GB UI tile layer, and the battle stage.
+//! billboards, the GB UI tile layer, the screen-space overlay, and the
+//! battle stage.
 //!
 //! Dispatch is defensive by contract: an unknown op code, a malformed arg
 //! list, or an out-of-range slot is a **no-op, never a panic** — the op
@@ -15,7 +16,7 @@ use crate::audio::Audio;
 use crate::pak::Pak;
 use crate::spec::{
     self, ENTS_MAX, PITCH_RUNGS, PITCH_TWEEN_TICKS, Q8, QUALITY, QUALITY_TIER_DEFAULT,
-    QualityDials, RIG_ZOOM_MAX, RIG_ZOOM_MIN, UI_COLS, UI_ROWS, op,
+    QualityDials, RIG_ZOOM_MAX, RIG_ZOOM_MIN, UI_COLS, UI_ROWS, VIEW_H, VIEW_W, op,
 };
 
 /// Map slots: slot 0 is the current map, 1..4 the connected neighbours at
@@ -25,6 +26,15 @@ pub const MAP_SLOTS: usize = 5;
 /// Packed [`OpResult::Stats`] layout: `u32 tick | u32 ops_applied`.
 /// Debug-only counters, not part of the contract.
 pub const STATS_LEN: usize = 8;
+
+/// Retained overlay commands accepted from one guest. Labels expand into
+/// rectangles later, so cap both the command count and each label here at
+/// the trust boundary.
+pub const UI_OVERLAY_ITEMS_MAX: usize = 256;
+pub const UI_OVERLAY_LABEL_CHARS_MAX: usize = 96;
+pub const UI_OVERLAY_SCALE_MAX: i32 = 8;
+/// Draw-list rectangles after 5x7 labels have expanded into horizontal runs.
+pub const UI_OVERLAY_RECTS_MAX: usize = 2048;
 
 /// What an op call hands back to the host.
 #[derive(Clone, Debug, PartialEq)]
@@ -70,6 +80,33 @@ pub struct UiText {
     pub x: i32,
     pub y: i32,
     pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UiOverlayRect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub abgr: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UiOverlayLabel {
+    pub x: i32,
+    pub y: i32,
+    pub scale: i32,
+    pub abgr: u32,
+    pub text: String,
+}
+
+/// Ordered retained overlay stream. Keeping both kinds in one vector means
+/// labels and rectangles composite in exactly the order the guest appended
+/// them on every backend.
+#[derive(Clone, Debug, PartialEq)]
+pub enum UiOverlayItem {
+    Rect(UiOverlayRect),
+    Label(UiOverlayLabel),
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -146,6 +183,8 @@ pub struct Scene {
     pub ui_text: Option<UiText>,
     /// Glyphs of `ui_text` shown. `uiText` resets it to "all".
     pub ui_reveal: u32,
+    /// Native screen-space commands composited after the GB UI layer.
+    pub ui_overlay: Vec<UiOverlayItem>,
     pub battle: Battle,
     /// The quality rung this host climbed to (`spec::quality_tier`), always a
     /// valid index into [`spec::QUALITY`]. HOST configuration, not guest
@@ -180,6 +219,7 @@ impl Scene {
             ui: [0u16; UI_COLS * UI_ROWS],
             ui_text: None,
             ui_reveal: u32::MAX,
+            ui_overlay: Vec::new(),
             battle: Battle::default(),
             quality: QUALITY_TIER_DEFAULT,
             audio: Audio::new(),
@@ -251,7 +291,8 @@ impl Scene {
     }
 
     /// Dispatch one op (voxel-spec.ts §Ops). `args` are the numeric args in
-    /// order; `s` carries the string for the string-bearing ops (`uiText`).
+    /// order; `s` carries the string for the string-bearing ops (`uiText`,
+    /// `uiLabel`).
     /// Unknown codes and malformed calls are no-ops.
     pub fn op(&mut self, code: u32, args: &[i32], s: Option<&str>) -> OpResult {
         self.ops = self.ops.wrapping_add(1);
@@ -408,6 +449,48 @@ impl Scene {
                 self.ui_text = None;
                 self.ui_reveal = u32::MAX;
             }
+            op::UI_RECT => {
+                if args.len() >= 5 && self.ui_overlay.len() < UI_OVERLAY_ITEMS_MAX {
+                    // Clip at ingestion. Besides avoiding useless retained
+                    // work this makes width/height and saturating additions
+                    // bounded before any backend sees them.
+                    let x0 = a(0).clamp(0, VIEW_W);
+                    let y0 = a(1).clamp(0, VIEW_H);
+                    let x1 = a(0).saturating_add(a(2).max(0)).clamp(0, VIEW_W);
+                    let y1 = a(1).saturating_add(a(3).max(0)).clamp(0, VIEW_H);
+                    if x1 > x0 && y1 > y0 {
+                        self.ui_overlay.push(UiOverlayItem::Rect(UiOverlayRect {
+                            x: x0,
+                            y: y0,
+                            w: x1 - x0,
+                            h: y1 - y0,
+                            abgr: a(4) as u32,
+                        }));
+                    }
+                }
+            }
+            op::UI_LABEL => {
+                if args.len() >= 4
+                    && a(2) > 0
+                    && self.ui_overlay.len() < UI_OVERLAY_ITEMS_MAX
+                    && let Some(text) = s
+                {
+                    let text: String = text.chars().take(UI_OVERLAY_LABEL_CHARS_MAX).collect();
+                    if !text.is_empty() {
+                        self.ui_overlay.push(UiOverlayItem::Label(UiOverlayLabel {
+                            // One viewport of off-screen allowance is enough
+                            // for partially visible labels and bounds all pen
+                            // arithmetic after the scale cap.
+                            x: a(0).clamp(-VIEW_W, VIEW_W),
+                            y: a(1).clamp(-VIEW_H, VIEW_H),
+                            scale: a(2).min(UI_OVERLAY_SCALE_MAX),
+                            abgr: a(3) as u32,
+                            text,
+                        }));
+                    }
+                }
+            }
+            op::UI_OVERLAY_CLEAR => self.ui_overlay.clear(),
 
             op::ARENA => {
                 if args.len() >= 5 {
@@ -582,6 +665,43 @@ mod tests {
         s.op(op::UI_FILL, &[18, 16, 5, 5, 7], None);
         assert_eq!(s.ui[17 * UI_COLS + 19], 7, "fill clips to the grid");
         assert_eq!(s.ui[16 * UI_COLS + 17], 0);
+    }
+
+    #[test]
+    fn overlay_is_bounded_clipped_and_clearable() {
+        let mut s = Scene::new();
+        s.op(op::UI_RECT, &[-10, 4, 20, i32::MAX, 0x4433_2211], None);
+        assert_eq!(
+            s.ui_overlay[0],
+            UiOverlayItem::Rect(UiOverlayRect {
+                x: 0,
+                y: 4,
+                w: 10,
+                h: VIEW_H - 4,
+                abgr: 0x4433_2211,
+            })
+        );
+        s.op(op::UI_RECT, &[0, 0, -1, 2, -1], None);
+        assert_eq!(s.ui_overlay.len(), 1, "non-positive sizes are refused");
+
+        let long = "a".repeat(UI_OVERLAY_LABEL_CHARS_MAX + 20);
+        s.op(op::UI_LABEL, &[i32::MAX, i32::MIN, 99, -1], Some(&long));
+        let UiOverlayItem::Label(label) = &s.ui_overlay[1] else {
+            panic!("label retained");
+        };
+        assert_eq!(label.x, VIEW_W);
+        assert_eq!(label.y, -VIEW_H);
+        assert_eq!(label.scale, UI_OVERLAY_SCALE_MAX);
+        assert_eq!(label.text.chars().count(), UI_OVERLAY_LABEL_CHARS_MAX);
+        s.op(op::UI_LABEL, &[0, 0, 0, -1], Some("ignored"));
+        assert_eq!(s.ui_overlay.len(), 2, "zero scale is refused");
+
+        for _ in s.ui_overlay.len()..(UI_OVERLAY_ITEMS_MAX + 20) {
+            s.op(op::UI_RECT, &[0, 0, 1, 1, -1], None);
+        }
+        assert_eq!(s.ui_overlay.len(), UI_OVERLAY_ITEMS_MAX);
+        s.op(op::UI_OVERLAY_CLEAR, &[], None);
+        assert!(s.ui_overlay.is_empty());
     }
 
     #[test]

@@ -341,10 +341,15 @@ impl Renderer {
                     // on real hardware (each upload carries a dcache
                     // writeback and a GE command flush).
                 }
+                Item::OverlayRect { .. } => {
+                    // Batched after ui_batch so the retained overlay always
+                    // composites over the complete GB layer.
+                }
             }
         }
 
         self.ui_batch(list, pak);
+        self.overlay_batch(list);
 
         // Hand back a 2D-clean state (the pocket3d-gu end_3d discipline).
         sys::sceGuDisable(GuState::DepthTest);
@@ -802,6 +807,56 @@ impl Renderer {
         );
     }
 
+    /// The full native-pixel overlay in one texture-free sprite draw. This
+    /// intentionally follows `ui_batch`; keeping it separate preserves the
+    /// GB layer's existing one-upload/one-draw fast path.
+    unsafe fn overlay_batch(&mut self, list: &DrawList) {
+        let n = list
+            .items
+            .iter()
+            .filter(|item| matches!(item, Item::OverlayRect { .. }))
+            .count();
+        if n == 0 {
+            return;
+        }
+
+        sys::sceGuDisable(GuState::DepthTest);
+        sys::sceGuDisable(GuState::Texture2D);
+        sys::sceGuDisable(GuState::AlphaTest);
+        sys::sceGuEnable(GuState::Blend);
+
+        let bytes = n * 2 * core::mem::size_of::<Vert2dC>();
+        let dst = self.pool.alloc(bytes) as *mut Vert2dC;
+        let mut at = 0usize;
+        for item in &list.items {
+            let Item::OverlayRect { x, y, w, h, abgr } = item else {
+                continue;
+            };
+            dst.add(at).write(Vert2dC {
+                abgr: *abgr,
+                x: *x as i16,
+                y: *y as i16,
+                z: 0,
+                pad: 0,
+            });
+            dst.add(at + 1).write(Vert2dC {
+                abgr: *abgr,
+                x: x.saturating_add(*w) as i16,
+                y: y.saturating_add(*h) as i16,
+                z: 0,
+                pad: 0,
+            });
+            at += 2;
+        }
+        sys::sceKernelDcacheWritebackRange(dst as *const c_void, bytes as u32);
+        sys::sceGuDrawArray(
+            GuPrimitive::Sprites,
+            SKY_VTYPE,
+            (n * 2) as i32,
+            core::ptr::null(),
+            dst as *const c_void,
+        );
+    }
 }
 
 impl Default for Renderer {

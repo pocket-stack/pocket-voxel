@@ -6,7 +6,8 @@
 //!
 //! Draw order (docs/VOXEL.md §3, the mod minus shader-bound passes):
 //! sky bands → terrain chunks (+ stamps) → water → shadow decals → player
-//! ghost (inverted depth, no write) → entity cards → grass → flower → GB UI.
+//! ghost (inverted depth, no write) → entity cards → grass → flower → GB UI
+//! → native screen-space overlay.
 //! Stamps are terrain sub-meshes and draw in the terrain pass. The `walker`
 //! entity flag needs no ordering here: every card already draws before the
 //! grass mesh, which is what grants grass its occlusion of walker feet.
@@ -228,6 +229,15 @@ pub enum Item {
         h: f32,
         page: u16,
         tile: u16,
+    },
+    /// A solid ABGR rectangle in native screen pixels. Overlay rectangles
+    /// are the final pass; labels have already expanded into these runs.
+    OverlayRect {
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        abgr: u32,
     },
 }
 
@@ -751,6 +761,8 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
 
     // 9. The GB UI layer.
     ui::append_ui(scene, pak, &mut items);
+    // 10. Native-pixel overlay, always after every GB UiQuad.
+    ui::append_overlay(scene, &mut items);
 
     DrawList {
         cam,
@@ -797,6 +809,7 @@ mod tests {
             Item::Ghost { .. } => 5,
             Item::Card { .. } => 6,
             Item::UiQuad { .. } => 9,
+            Item::OverlayRect { .. } => 10,
         }
     }
 
@@ -846,6 +859,7 @@ mod tests {
             None,
         );
         s.op(op::UI_TILE, &[2, 3, 5], None);
+        s.op(op::UI_RECT, &[8, 9, 10, 11, -1], None);
         let list = build(&s, &pak);
         assert_eq!(list.palette, -1, "no palette op = the grayscale ramp");
         s.op(op::PALETTE, &[2], None);
@@ -859,7 +873,18 @@ mod tests {
         sorted.sort_unstable();
         assert_eq!(ranks, sorted, "items appear in §3 draw order");
         assert!(matches!(list.items[0], Item::SkyBands { .. }));
-        assert!(matches!(list.items.last(), Some(Item::UiQuad { .. })));
+        assert!(matches!(list.items.last(), Some(Item::OverlayRect { .. })));
+        let ui_at = list
+            .items
+            .iter()
+            .position(|i| matches!(i, Item::UiQuad { .. }))
+            .unwrap();
+        let overlay_at = list
+            .items
+            .iter()
+            .position(|i| matches!(i, Item::OverlayRect { .. }))
+            .unwrap();
+        assert!(ui_at < overlay_at, "overlay follows the whole GB UI pass");
         assert!(list.items.iter().any(|i| matches!(i, Item::Ghost { .. })));
         // Deterministic: the same scene builds the same list.
         let again = build(&s, &pak);

@@ -24,6 +24,14 @@ import { apply as applyEvolution, checkParty } from "./rules/evolution.ts";
 import { movesLearnedAt } from "./rules/experience.ts";
 import { MAP_ENTRY_AFTER_BATTLE, POST_BATTLE_RETURN, YES_NO_ANSWER } from "./rules/timing.ts";
 import {
+  PC_DEX_ROWS,
+  PC_HOME_ROWS,
+  PC_MAIL_ROWS,
+  type PcDesktopPage,
+  type PcDesktopSource,
+  type PcPartyRow,
+} from "./ui/pc-desktop.ts";
+import {
   Scene,
   type BattleSceneView,
   type ChoiceSource,
@@ -52,6 +60,11 @@ class OverworldState implements GameState {
   }
 }
 
+interface MenuChoice {
+  labels: readonly string[];
+  choose(index: number): void;
+}
+
 class TextBoxState implements GameState, UiBoxSource {
   readonly kind = "textbox";
   readonly box: Textbox;
@@ -60,7 +73,7 @@ class TextBoxState implements GameState, UiBoxSource {
     private game: VoxelmonGame,
     text: string,
     private onDone?: () => void,
-    private choice?: (yes: boolean) => void,
+    private choice?: MenuChoice,
   ) {
     this.box = new Textbox(text, {
       player: game.save.player.name,
@@ -74,7 +87,7 @@ class TextBoxState implements GameState, UiBoxSource {
     if (this.choice && this.box.done) {
       if (!this.choicePushed) {
         this.choicePushed = true;
-        this.game.push(new ChoiceState(this.game, this.choice));
+        this.game.push(new ChoiceState(this.game, this.choice.labels, this.choice.choose));
       }
       return;
     }
@@ -89,7 +102,7 @@ class TextBoxState implements GameState, UiBoxSource {
     if (this.choice && this.box.done) {
       if (!this.choicePushed) {
         this.choicePushed = true;
-        this.game.push(new ChoiceState(this.game, this.choice));
+        this.game.push(new ChoiceState(this.game, this.choice.labels, this.choice.choose));
       }
       return;
     }
@@ -102,20 +115,28 @@ class TextBoxState implements GameState, UiBoxSource {
 
 class ChoiceState implements GameState, ChoiceSource {
   readonly kind = "choice";
-  yes: boolean;
+  selected: number;
   /** The answer given, held on screen before it is handed back. */
-  private pending: boolean | null = null;
+  private pending: number | null = null;
   private holdFrames = 0;
   constructor(
     private game: VoxelmonGame,
-    private cb: (yes: boolean) => void,
+    readonly labels: readonly string[],
+    private cb: (index: number) => void,
     opts?: { defaultNo?: boolean; noSound?: boolean },
   ) {
+    if (labels.length < 2 || labels.length > 4) {
+      throw new Error("a choice needs two to four labels");
+    }
     // ChoiceBox.lua:16 — some of the original's prompts open on NO
-    this.yes = !opts?.defaultNo;
+    this.selected = opts?.defaultNo ? labels.length - 1 : 0;
     this.noSound = opts?.noSound === true;
   }
   private readonly noSound: boolean;
+  /** Compatibility name for the original YES/NO call sites. */
+  get yes(): boolean {
+    return this.selected === 0;
+  }
   update(): void {
     const input = this.game.input;
     // ChoiceBox.lua:34-45: BOTH branches of DisplayTwoOptionMenu hold 15
@@ -124,29 +145,151 @@ class ChoiceState implements GameState, ChoiceSource {
     if (this.pending !== null) {
       this.holdFrames -= 1;
       if (this.holdFrames <= 0) {
-        const yes = this.pending;
+        const selected = this.pending;
         this.pending = null;
         this.game.pop(); // this choice
         this.game.pop(); // the text box under it (ChoiceBox pops both)
-        this.cb(yes);
+        this.cb(selected);
       }
       return;
     }
-    if (input.wasPressed("up") || input.wasPressed("down")) {
-      this.yes = !this.yes;
+    if (input.wasPressed("up")) {
+      this.selected = (this.selected + this.labels.length - 1) % this.labels.length;
+    } else if (input.wasPressed("down")) {
+      this.selected = (this.selected + 1) % this.labels.length;
     } else if (input.wasPressed("a")) {
       // HandleMenuInput_ (home/window.asm): SFX_PRESS_AB on A and B alike
       if (!this.noSound) this.game.audio.playSfx("Press_AB"); // ChoiceBox.lua:53
-      this.pending = this.yes;
+      this.pending = this.selected;
       this.holdFrames = YES_NO_ANSWER;
     } else if (input.wasPressed("b")) {
       if (!this.noSound) this.game.audio.playSfx("Press_AB"); // ChoiceBox.lua:59
       // .choseSecondMenuItem writes wCurrentMenuItem = 1 BEFORE the hold, so
       // the cursor visibly snaps to NO for those 15 frames
-      this.yes = false;
-      this.pending = false;
+      this.selected = this.labels.length - 1;
+      this.pending = this.selected;
       this.holdFrames = YES_NO_ANSWER;
     }
+  }
+}
+
+/**
+ * The local bedroom computer. It is a real stack state: while it is topmost,
+ * the overworld underneath receives no input. Rendering is delegated through
+ * PcDesktopSource, so the controller knows nothing about PSP/Vita drawing.
+ */
+class PcDesktopState implements GameState, PcDesktopSource {
+  readonly kind = "pc-desktop";
+  revision = 0;
+  page: PcDesktopPage = "home";
+  selected = 0;
+  status = "4 OBJECTS";
+  readonly trainerName: string;
+  boxNumber = 1;
+  readonly readMail = [false, false, false];
+  readonly party: readonly PcPartyRow[];
+
+  constructor(private game: VoxelmonGame) {
+    this.trainerName = game.save.player.name;
+    this.party = game.save.party.map((mon) => ({
+      name: mon.nickname ?? game.data.pokemon[mon.species]?.name ?? mon.species,
+      level: mon.level,
+      hp: mon.hp,
+      maxHp: mon.stats.hp,
+    }));
+  }
+
+  update(): void {
+    const input = this.game.input;
+    if (input.wasPressed("start")) {
+      this.close();
+      return;
+    }
+    if (input.wasPressed("b")) {
+      this.game.audio.playSfx("Press_AB");
+      if (this.page === "home") {
+        this.close(false);
+      } else {
+        this.page = "home";
+        this.selected = 0;
+        this.status = "4 OBJECTS";
+        this.changed();
+      }
+      return;
+    }
+
+    const count = this.rowCount();
+    if (input.wasPressed("up")) {
+      this.selected = (this.selected + count - 1) % count;
+      this.changed();
+      return;
+    }
+    if (input.wasPressed("down")) {
+      this.selected = (this.selected + 1) % count;
+      this.changed();
+      return;
+    }
+    if (this.page === "storage" && (input.wasPressed("left") || input.wasPressed("right"))) {
+      const delta = input.wasPressed("left") ? -1 : 1;
+      this.boxNumber = ((this.boxNumber - 1 + delta + 12) % 12) + 1;
+      this.status = `BOX ${String(this.boxNumber).padStart(2, "0")} ONLINE`;
+      this.changed();
+      return;
+    }
+    if (!input.wasPressed("a")) return;
+    this.game.audio.playSfx("Press_AB");
+    this.activate();
+  }
+
+  private rowCount(): number {
+    switch (this.page) {
+      case "pokedex":
+        return PC_DEX_ROWS.length;
+      case "storage":
+        return Math.max(1, this.party.length);
+      case "mail":
+        return PC_MAIL_ROWS.length;
+      default:
+        return PC_HOME_ROWS.length;
+    }
+  }
+
+  private activate(): void {
+    if (this.page === "home") {
+      if (this.selected === 3) {
+        this.close(false);
+        return;
+      }
+      this.page = (["pokedex", "storage", "mail"] as const)[this.selected]!;
+      this.selected = 0;
+      this.status =
+        this.page === "pokedex"
+          ? "3 SPECIES INDEXED"
+          : this.page === "storage"
+            ? "BOX 01 ONLINE"
+            : `${this.readMail.filter((read) => !read).length} NEW MESSAGES`;
+      this.changed();
+      return;
+    }
+    if (this.page === "pokedex") {
+      this.status = `${PC_DEX_ROWS[this.selected]!.slice(0, 3)} DATA LOADED`;
+    } else if (this.page === "storage") {
+      this.status = `BOX ${String(this.boxNumber).padStart(2, "0")} SYNC COMPLETE`;
+    } else {
+      this.readMail[this.selected] = true;
+      this.status = `${PC_MAIL_ROWS[this.selected]} MESSAGE READ`;
+    }
+    this.changed();
+  }
+
+  private changed(): void {
+    this.revision += 1;
+  }
+
+  private close(playPress = true): void {
+    if (playPress) this.game.audio.playSfx("Press_AB");
+    this.game.audio.playSfx("Turn_Off_PC");
+    this.game.pop();
   }
 }
 
@@ -468,7 +611,32 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   }
 
   showChoice(text: string, choice: (yes: boolean) => void): void {
-    this.push(new TextBoxState(this, text, undefined, choice));
+    this.showMenuChoice(text, ["YES", "NO"], (index) => choice(index === 0));
+  }
+
+  /** A native GB dialogue with caller-owned labels (the PC uses LOCAL/REMOTE). */
+  showMenuChoice(text: string, labels: readonly string[], choice: (index: number) => void): void {
+    this.push(new TextBoxState(this, text, undefined, { labels, choose: choice }));
+  }
+
+  /**
+   * OpenRedsPC replacement for this runtime's bedroom: choose a data source in
+   * the game's native dialogue first, then mount the local shell as a modal
+   * state. The remote branch is deliberately explicit and never falls back to
+   * local when no mock host is online.
+   */
+  openBedroomComputer(): void {
+    this.audio.playSfx("Turn_On_PC");
+    this.showMenuChoice("Which PC do you\nwant to open?", ["LOCAL PC", "REMOTE PC"], (index) => {
+      this.audio.playSfx("Enter_PC");
+      if (index === 0) {
+        this.push(new PcDesktopState(this));
+        return;
+      }
+      this.showText("PALLETNET is\nsearching for a\nremote PC...\fNo remote PC is\nonline.", () => {
+        this.audio.playSfx("Turn_Off_PC");
+      });
+    });
   }
 
   pushWarpFade(frames: number, midpoint: () => void, onDone?: () => void): void {
@@ -557,6 +725,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   uiChoice(): ChoiceSource | null {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "choice" ? (top as ChoiceState) : null;
+  }
+
+  pcDesktop(): PcDesktopSource | null {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "pc-desktop" ? (top as PcDesktopState) : null;
   }
 
   battleView(): BattleSceneView | null {

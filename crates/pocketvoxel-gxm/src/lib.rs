@@ -69,9 +69,9 @@ pub const PHYSICAL_W: i32 = VIEW_W * 2;
 pub const PHYSICAL_H: i32 = VIEW_H * 2;
 
 /// Sequential indices for the CPU-built passes, which are all plain triangle
-/// lists. Sized for the largest of them: the GB UI layer is a 20x18 grid, so
-/// 360 quads is its ceiling and this is well past it.
-const SEQUENTIAL_INDICES: usize = 4096;
+/// lists. The overlay expands bounded 5x7 label runs to at most 2048 quads
+/// (12288 vertices), which is the largest CPU-built pass.
+const SEQUENTIAL_INDICES: usize = 16384;
 
 /// CPU-built untextured vertex: sky bands, shadow decals, the ghost.
 #[repr(C)]
@@ -321,9 +321,14 @@ impl Renderer {
                     // list, and the whole GB layer is one staged upload and
                     // one draw instead of ~100 of each.
                 }
+                Item::OverlayRect { .. } => {
+                    // Batched after ui_batch so it composites over the
+                    // complete GB layer without disturbing that fast path.
+                }
             }
         }
         self.ui_batch(pipeline, list, pak);
+        self.overlay_batch(pipeline, list);
     }
 
     // -- textures ------------------------------------------------------------
@@ -629,6 +634,45 @@ impl Renderer {
         gxm::set_depth(DepthMode::Overlay);
         if pipeline.bind_tex(&logical_ortho().m, TexMode::Alpha) {
             pipeline.draw(staged, self.sequential.as_ptr().cast(), self.ui.len() as u32);
+            self.draw_count += 1;
+        }
+    }
+
+    /// One staged flat-colour pass for every native-pixel overlay rectangle.
+    /// It follows the untouched GB UI batch and preserves append order within
+    /// the triangle stream for overlapping translucent commands.
+    unsafe fn overlay_batch(&mut self, pipeline: &gxm::Pipeline, list: &DrawList) {
+        self.quad.clear();
+        for item in &list.items {
+            let Item::OverlayRect { x, y, w, h, abgr } = item else {
+                continue;
+            };
+            if self.quad.len() + 6 > SEQUENTIAL_INDICES {
+                break;
+            }
+            let corner = |x: i32, y: i32| FlatVert {
+                abgr: *abgr,
+                x: x as f32,
+                y: y as f32,
+                z: 0.0,
+            };
+            let (x0, y0) = (*x, *y);
+            let (x1, y1) = (x.saturating_add(*w), y.saturating_add(*h));
+            self.quad.extend_from_slice(&[
+                corner(x0, y0),
+                corner(x1, y0),
+                corner(x1, y1),
+                corner(x0, y0),
+                corner(x1, y1),
+                corner(x0, y1),
+            ]);
+        }
+        let Some(staged) = stage(&self.quad) else {
+            return;
+        };
+        gxm::set_depth(DepthMode::Overlay);
+        if pipeline.bind_flat(&logical_ortho().m, true) {
+            pipeline.draw(staged, self.sequential.as_ptr().cast(), self.quad.len() as u32);
             self.draw_count += 1;
         }
     }

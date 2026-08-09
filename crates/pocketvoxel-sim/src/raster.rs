@@ -217,6 +217,24 @@ fn blend_over(dst: u32, rgb: [u32; 3], a: u32) -> u32 {
     0xff00_0000 | (b << 16) | (g << 8) | r
 }
 
+fn draw_overlay_rect(frame: &mut Frame, x: i32, y: i32, w: i32, h: i32, abgr: u32) {
+    let x0 = x.clamp(0, W as i32) as usize;
+    let y0 = y.clamp(0, H as i32) as usize;
+    let x1 = x.saturating_add(w.max(0)).clamp(0, W as i32) as usize;
+    let y1 = y.saturating_add(h.max(0)).clamp(0, H as i32) as usize;
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let rgb = [abgr & 0xff, (abgr >> 8) & 0xff, (abgr >> 16) & 0xff];
+    let a = (abgr >> 24) & 0xff;
+    for py in y0..y1 {
+        for px in x0..x1 {
+            let dst = &mut frame.color[py * W + px];
+            *dst = blend_over(*dst, rgb, a);
+        }
+    }
+}
+
 fn draw_clip_tri(
     frame: &mut Frame,
     tri: [PV; 3],
@@ -600,6 +618,9 @@ pub fn render(list: &DrawList, pak: &Pak, cache: &AtlasCache) -> Frame {
                     }
                 }
             }
+            Item::OverlayRect { x, y, w, h, abgr } => {
+                draw_overlay_rect(&mut frame, *x, *y, *w, *h, *abgr);
+            }
         }
     }
     frame
@@ -716,5 +737,18 @@ mod tests {
         assert_eq!(frame.color[0], 0xff111111);
         assert_eq!(frame.color[63 * W], 0xff444444);
         assert_eq!(frame.color[200 * W], 0xff444444);
+    }
+
+    #[test]
+    fn overlay_rects_clip_and_alpha_composite_in_order() {
+        let mut frame = Frame::new();
+        draw_overlay_rect(&mut frame, -2, 1, 4, 2, 0xff00_00ff);
+        assert_eq!(
+            frame.color.iter().filter(|&&c| c == 0xff00_00ff).count(),
+            4,
+            "two clipped columns by two rows"
+        );
+        draw_overlay_rect(&mut frame, 0, 1, 1, 1, 0x8000_ff00);
+        assert_eq!(frame.color[W], 0xff00_807f, "green blends over red");
     }
 }

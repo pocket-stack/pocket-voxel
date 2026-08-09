@@ -62,6 +62,13 @@ describe.skipIf(!genReady)("voxel importer dataset", () => {
     expect([maps.OAKS_LAB.width, maps.OAKS_LAB.height]).toEqual([5, 6]);
   });
 
+  test("field: the bedroom PC keeps its ROM hidden-event coordinate and facing", async () => {
+    const field = await json("field");
+    expect(field.hiddenExtras.pcTiles.REDS_HOUSE_2F).toEqual([
+      { x: 0, y: 1, facing: "up" },
+    ]);
+  });
+
   test("tilesets: OVERWORLD walkable list and grass tile", async () => {
     const tilesets = await json("tilesets");
     const overworld = tilesets.OVERWORLD;

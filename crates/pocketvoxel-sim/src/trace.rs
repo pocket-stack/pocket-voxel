@@ -5,7 +5,7 @@
 //! voxtrace 1
 //! t <tick> <buttons>          # starts a tick; buttons = VOX_BTN that tick
 //! o <code> <i32> ...          # one op, numeric args in order
-//! s <code> <i32> <i32> <json-string>   # the string-bearing op forms
+//! s <code> <i32> ... <json-string>      # numeric args, then one string
 //! m <name>                    # checkpoint: render + hash here
 //! ```
 //!
@@ -141,26 +141,27 @@ pub fn parse(text: &str) -> Result<Vec<Entry>, String> {
                 });
             }
             "s" => {
-                let code = tok
+                // The JSON literal starts at the first quote. Everything
+                // before it is the form tag, code, then any number of i32
+                // args: uiText carries two, uiLabel carries four.
+                let quote = line.find('"').ok_or_else(|| err("missing string arg"))?;
+                let rest = &line[quote..];
+                let mut head = line[..quote].split_whitespace();
+                // Consume the form tag in every build. Putting `head.next()`
+                // inside debug_assert would compile the side effect away in
+                // release builds and leave `s` to be parsed as the op code.
+                let form = head.next();
+                debug_assert_eq!(form, Some("s"));
+                let code = head
                     .next()
                     .and_then(|v| v.parse().ok())
                     .ok_or_else(|| err("bad op code"))?;
-                let a0 = tok
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .ok_or_else(|| err("bad op arg"))?;
-                let a1 = tok
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .ok_or_else(|| err("bad op arg"))?;
-                // The string is the remainder of the line from the first quote.
-                let rest = line
-                    .find('"')
-                    .map(|i| &line[i..])
-                    .ok_or_else(|| err("missing string arg"))?;
+                let args = head
+                    .map(|v| v.parse::<i32>().map_err(|_| err("bad op arg")))
+                    .collect::<Result<Vec<_>, _>>()?;
                 out.push(Entry::Op {
                     code,
-                    args: vec![a0, a1],
+                    args,
                     s: Some(parse_json_string(rest).map_err(|e| err(&e))?),
                 });
             }
@@ -340,10 +341,16 @@ mod tests {
 
     #[test]
     fn parses_the_schema_forms() {
-        let text =
-            "voxtrace 1\nt 0 0\no 12 1024 1024\ns 52 1 14 \"HI\\nYOU\"\nm boot\nt 1 16\nm next\n";
+        let text = "voxtrace 1\n\
+t 0 0\n\
+o 12 1024 1024\n\
+s 52 1 14 \"HI\\nYOU\"\n\
+s 56 20 30 2 -1 \"PC: A/B\"\n\
+m boot\n\
+t 1 16\n\
+m next\n";
         let entries = parse(text).unwrap();
-        assert_eq!(entries.len(), 6);
+        assert_eq!(entries.len(), 7);
         assert_eq!(
             entries[0],
             Entry::Tick {
@@ -359,7 +366,15 @@ mod tests {
                 s: Some("HI\nYOU".to_string())
             }
         );
-        assert_eq!(entries[3], Entry::Mark("boot".to_string()));
+        assert_eq!(
+            entries[3],
+            Entry::Op {
+                code: 56,
+                args: vec![20, 30, 2, -1],
+                s: Some("PC: A/B".to_string())
+            }
+        );
+        assert_eq!(entries[4], Entry::Mark("boot".to_string()));
         assert!(parse("voxtrace 2\n").is_err(), "unknown version");
         assert!(parse("t 0 0\n").is_err(), "missing header");
         assert!(parse("voxtrace 1\nq zzz\n").is_err(), "unknown line kind");
