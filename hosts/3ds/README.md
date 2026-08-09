@@ -34,8 +34,11 @@ Makefile         runs INSIDE the devkitARM container, driven by tools/voxel-3ds.
 ## Building
 
 ```
-bun tools/voxel-3ds.ts                  dist/3ds/voxelmon.3dsx
+bun tools/voxel-3ds.ts                  dist/3ds/voxelmon.3dsx      31.9 MiB
 bun tools/voxel-3ds.ts --capture        dist/3ds/voxelmon-capture.3dsx
+bun tools/voxel-3ds.ts --cia            also dist/3ds/voxelmon.cia
+bun tools/voxel-3ds.ts --sd-pak --cia --max-draws 4
+                                        a device bisect binary,     1.3 MiB
 ```
 
 The toolchain spans two environments. The Rust half cross-compiles on macOS —
@@ -51,6 +54,28 @@ The guest bundle and the 32 MB pak ride in the .3dsx's **RomFS**, so there is
 one file to install and a run cannot pick up a stale pak sitting next to a fresh
 binary. Everything the build reads and writes lives under git-ignored `dist/`:
 **no ROM-derived byte ever commits.**
+
+`--sd-pak` gives that guarantee up to make a device attempt cheap. The pak is
+30.6 MiB of a **31.9 MiB** package; with it left out the package is **1.3 MiB**,
+which is a couple of seconds over the console's FTP instead of the fifty a full
+push takes. The run then reads `sdmc:/pocketvoxel-3ds/voxelmon.vxpak`, the same
+directory it writes its diagnostics to, and the pak is copied once and reused by
+every rebuild:
+
+```
+bun tools/voxel-3ds.ts --sd-pak --cia
+# copy dist/voxelmon/voxelmon.vxpak to sdmc:/pocketvoxel-3ds/voxelmon.vxpak once
+```
+
+What it costs is exactly the guarantee RomFS gives: **nothing ties the pak on
+the card to the binary reading it**, so a re-cook that is not re-pushed runs
+against yesterday's content and says nothing. `memory.txt`'s boot line reports
+which one the build used (`pak=romfs:/voxelmon.vxpak` or the sdmc path), and the
+bottom screen prints it too. RomFS stays the default, and a `--capture` build is
+refused the flag outright — the e2e driver deletes `sdmc:/pocketvoxel-3ds`
+before every run, which is where the pak would be. The guest bundle stays in
+RomFS either way: it is 163 KiB, so moving it buys nothing, and it is code that
+has to match the host it was built with.
 
 `--capture` builds the deterministic e2e binary. Its input tape and its mark
 ticks are extracted from a recorded `.vtrace` and **baked into the binary**, the
@@ -143,7 +168,10 @@ console reads it directly: `p voxel_host_stage`, `p voxel_host_tick`.
 debugger:
 
 ```
-tick 1334 stage frame-end scene 1335 items 15 rung 0 draws 14 verts 1455 idx 4590 …
+tick 633 stage frame-sync scene 634 items 15 rung 0 draws 14 verts 1455 idx 4590
+tex 18/1104 KiB arena 31/171 KiB drop a0 t0 w0
+gpu f633 draws 14/14 verts 1455 idx 4590 cap -
+walk cmd 14/15 kind 1 vfmt 0 depth 1 flags 0xb page 52 pal 46 v 4 i 6
 ```
 
 It writes every 30 ticks and, once the first frame is behind it, on every stage
@@ -152,6 +180,20 @@ ticks, where a tick cadence names neither the frame nor the step. That costs one
 SD write per stage change and does not hold 60 Hz; `--heartbeat 0` turns the
 file off and leaves the free part. This is the PSP capture path's mechanism
 (`crates/pocketvoxel-psp/src/capture.rs`) with the stage and the counters added.
+
+**Two frames are on that line, and the difference is why the console's own
+wedge line was misread.** The counters before `gpu` are the crate's LAST
+RECORD, and the loop records frame N before it waits for the GPU to finish
+frame N−1 — so at a `frame-begin` wedge they describe **the frame that has not
+been submitted**. The `gpu` group is the frame that has: snapshotted at the end
+of the command walk, so the next record cannot overwrite it. The New 3DS LL's
+`tick 1 stage frame-begin … draws 9 verts 7336 idx 11004` is frame 1, and
+frame 0 — the frame the PICA200 was stuck on — was never written down.
+
+`walk` is the last command the walk reached, with the kind, vertex format,
+depth mode, flags, page and palette that name it. Read it against the stage: at
+`draw-walk` the CPU stopped inside that command, and anywhere else the walk
+finished and the GPU holds the frame `gpu` describes.
 
 **Neither of the frame's waits on the GPU can block forever.**
 `C3D_FrameBegin(C3D_FRAME_SYNCDRAW)` is two waits and neither ends on its own:
@@ -209,6 +251,34 @@ every gap reads as time the thread was not running and 150 s produced no error
 file — the suspension shape, forgiven. Injecting a single 6 s absence into the
 wait gives `ran 1000 ms, stalled 6000 ms in 1 gaps`: the absence excluded, the
 wedge still caught.
+
+**`--max-draws N` bisects which command the GPU stopped on.** Only the first N
+draw commands of each frame reach it; the cap travels in `hb.txt` (`cap N`), in
+`memory.txt` (`max_draws=N`) and on the bottom screen, so a bisect binary is
+never mistaken for a full one, and a `--capture` build is refused it.
+
+`--max-draws 0` is the split worth taking first, because a frame's GX queue is
+three entries from three different engines — the memory fill
+`C3D_RenderTargetClear` queues (PSC), the command list `C3D_FrameEnd` submits
+(P3D), and the display transfer that presents it (PPF) — and the queue wait
+returns only when all three are done, without saying which one was not. With no
+draws the command buffer is empty, `C3Di_SplitFrame` finds nothing, and **no
+command list is queued at all**: a run that still wedges at 0 has no 3D work in
+it. Verified on Azahar — 633 ticks at `gpu f366 draws 0/14 verts 0 idx 0 cap 0`
+with `tex 0/0 KiB`, since the cap stops the walk before a texture is expanded.
+
+**`--present 0` takes the transfer out too.** It skips
+`C3D_RenderTargetSetOutput`, so citro3d's `linkedTarget[]` stays empty and
+`C3D_FrameEnd` queues no display transfer; with `--max-draws 0` beside it a
+frame is the memory fill alone. The top screen then holds whatever was on it,
+which is why `hb.txt` carries `present 0` next to `cap` — the file says which
+of the three jobs the binary still submits. Verified on Azahar: 638 ticks at
+`cap 0 present 0`.
+
+Above 0 the cap walks the DrawList's own order: sky bands, terrain and its
+trees, stamps, water, shadow decals, ghost, cards, grass, flower, UI. The
+`walk` group names the first command the cap refused, which is the next draw to
+admit when a run survives.
 
 ## Acceptance
 

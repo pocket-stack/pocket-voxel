@@ -14,10 +14,13 @@
  *
  * Three PICA200 facts shape the code:
  *
- *   - Vertex and index data must live in linearAlloc memory. BufInfo_Add
- *     rejects any pointer below physical 0x18000000, and the PICA addresses
- *     the index array relative to the vertex buffer base, so both come out of
- *     the crate's one arena and the indices always sit above the vertices.
+ *   - Vertex and index data must live in linearAlloc memory. BufInfo_Init
+ *     writes base_paddr = 0x18000000, the base of FCRAM, and never moves it;
+ *     BufInfo_Add rejects any buffer below it and stores the rest as offsets
+ *     from it, and C3D_DrawElements subtracts the same constant from the index
+ *     pointer. So both pools come out of the crate's one arena, and an index
+ *     pointer osConvertVirtToPhys cannot resolve makes C3D_DrawElements return
+ *     before emitting — a dropped draw, not a hung one (docs/PICA.md §2.4).
  *   - There is no fragment shader. Six TEV stages stand in: stage 0 does the
  *     work and the five behind it pass the result through.
  *   - There is no paletted texture format. Every (page, frame, palette,
@@ -101,9 +104,74 @@ static uint32_t texture_capacity;
 
 static uint32_t clear_word = 0x000000ffu;
 static uint32_t dropped;
+static uint32_t frame_draws;
 static uint32_t textures_failed;
 static char stats_line[192];
+static char trace_line[224];
 static bool initialized;
+
+// ---------------------------------------------------------------------------
+// the breadcrumb and the draw cap
+// ---------------------------------------------------------------------------
+
+/*
+ * How many draw commands of each frame reach the GPU. -1 is every one of them,
+ * which is what a build without --max-draws compiles.
+ *
+ * This exists because a frame that wedges the PICA200 wedges it on ONE command,
+ * and the only evidence a halted console leaves is that the queue never
+ * drained. Capping the walk turns "the GPU never finished frame 0" into a
+ * bisection: 0 submits the clear and the present with no command list at all
+ * (citro3d queues no GX_ProcessCommandList when the command buffer is empty),
+ * so a wedge at 0 is not a draw; N and N-1 straddling the wedge names the draw.
+ *
+ * The cap is a build-time define rather than a runtime toggle on purpose: the
+ * binary a person installs then IS the experiment, and the number it was built
+ * with travels in the heartbeat next to the result.
+ */
+#ifndef PV3DS_HOST_MAX_DRAWS
+#define PV3DS_HOST_MAX_DRAWS (-1)
+#endif
+
+/*
+ * The last command the walk touched, and what the frame that reached
+ * C3D_FrameEnd was made of.
+ *
+ * Plain stores, no formatting and no syscall, so the walk pays nothing for
+ * them. `walk` is overwritten per command; `flight` is snapshotted once, at
+ * the end of the walk, and is therefore still describing the SUBMITTED frame
+ * while the next frame is being recorded over the crate's stats.
+ */
+typedef struct {
+  uint32_t index;   /* command index within the frame */
+  uint32_t total;   /* commands in that frame */
+  uint8_t kind;     /* PV_PICA_CMD_* */
+  uint8_t vfmt;     /* PV_PICA_VFMT_* */
+  uint8_t depth;    /* PV_PICA_DEPTH_* */
+  uint8_t flags;    /* PV_PICA_F_* */
+  uint16_t page;
+  uint16_t pal;
+  uint32_t verts;
+  uint32_t indices;
+} WalkCrumb;
+
+typedef struct {
+  uint32_t frame;     /* how many frames the walk has completed */
+  uint32_t submitted; /* draws this frame actually issued */
+  uint32_t offered;   /* draws the frame contained */
+  uint32_t verts;
+  uint32_t indices;
+} FlightProfile;
+
+/* External linkage and volatile for the same reason the host's stage global
+ * has both: a debugger on a halted console names them, and the store must stay
+ * where the source puts it. */
+volatile WalkCrumb voxel_gfx_walk;
+volatile FlightProfile voxel_gfx_flight;
+
+int32_t voxel_gfx_max_draws(void) {
+  return (int32_t)(PV3DS_HOST_MAX_DRAWS);
+}
 
 // ---------------------------------------------------------------------------
 // resources
@@ -288,6 +356,7 @@ void voxel_gfx_prepare(void) {
   if (!initialized) return;
   const PvPicaFrame *f = pv_pica_frame();
   dropped = 0;
+  frame_draws = 0;
   clear_word = 0x000000ffu;
 
   /* The tilt over the (small, deduplicated) matrix table. C3D_Mtx.m[] is
@@ -321,6 +390,10 @@ void voxel_gfx_prepare(void) {
       clear_word = __builtin_bswap32(c->clear_abgr);
       continue;
     }
+    /* Counted here rather than in the walk because the walk STOPS at the draw
+     * cap, and the number a bisect needs is how many draws the frame has, not
+     * how many it got through. */
+    if (c->index_count != 0 && c->vert_count != 0) frame_draws += 1;
     uint32_t vertex_end = c->vert_offset + c->vert_count * VERTEX_STRIDE;
     uint32_t index_end = c->index_offset + c->index_count * 2u;
     if (c->vert_offset < low) low = c->vert_offset;
@@ -392,12 +465,33 @@ void voxel_gfx_render(void) {
   int last_tev = -1;
   int last_vfmt = -1;
   C3D_Tex *bound = NULL;
+  const int32_t cap = voxel_gfx_max_draws();
+  uint32_t submitted = 0;
+  uint32_t flight_verts = 0;
+  uint32_t flight_indices = 0;
 
   for (uint32_t i = 0; i < f->cmd_count; i += 1) {
     const PvPicaCmd *c = &f->cmds[i];
+    /* The breadcrumb is written BEFORE the command runs, so a stop inside the
+     * walk — a texture expansion, a bind, a buffer configuration — leaves the
+     * command that was running named rather than the one before it. */
+    voxel_gfx_walk.index = i;
+    voxel_gfx_walk.total = f->cmd_count;
+    voxel_gfx_walk.kind = c->kind;
+    voxel_gfx_walk.vfmt = c->vfmt;
+    voxel_gfx_walk.depth = c->depth;
+    voxel_gfx_walk.flags = c->flags;
+    voxel_gfx_walk.page = c->page;
+    voxel_gfx_walk.pal = c->pal;
+    voxel_gfx_walk.verts = c->vert_count;
+    voxel_gfx_walk.indices = c->index_count;
     /* The clear was applied before the frame opened (voxel_gfx_prepare). */
     if (c->kind != PV_PICA_CMD_DRAW) continue;
     if (c->index_count == 0 || c->vert_count == 0) continue;
+    /* The cap stops the walk rather than skipping past it: "the first N draws
+     * of the frame" is the experiment, and a hole in the middle would be a
+     * different picture with the same draw count. */
+    if (cap >= 0 && submitted >= (uint32_t)cap) break;
     if (c->mtx >= f->matrix_count || c->mtx >= matrix_capacity) {
       dropped += 1;
       continue;
@@ -446,9 +540,10 @@ void voxel_gfx_render(void) {
 
     /*
      * The buffer base is this command's own vertex block, so its u16 indices
-     * all start at 0 — the pak's vert_base convention, preserved. The indices
-     * are drawn from the same arena and always sit ABOVE the vertices, which
-     * is what lets the PICA address them relative to the vertex base.
+     * all start at 0 — the pak's vert_base convention, preserved. The index
+     * pointer is addressed independently, from the base of FCRAM, so where it
+     * sits relative to this block does not matter; what matters is that it is
+     * linear memory, which the arena guarantees.
      */
     C3D_BufInfo buffer;
     BufInfo_Init(&buffer);
@@ -468,7 +563,22 @@ void voxel_gfx_render(void) {
       C3D_UNSIGNED_SHORT,
       f->arena + c->index_offset
     );
+    submitted += 1;
+    flight_verts += c->vert_count;
+    flight_indices += c->index_count;
   }
+
+  /*
+   * What was handed to the GPU, snapshotted here and not read again until the
+   * next frame's queue wait — which is exactly the window in which this frame
+   * is the one in flight. The crate's own counters are overwritten by the next
+   * record, which happens BEFORE that wait.
+   */
+  voxel_gfx_flight.submitted = submitted;
+  voxel_gfx_flight.offered = frame_draws;
+  voxel_gfx_flight.verts = flight_verts;
+  voxel_gfx_flight.indices = flight_indices;
+  voxel_gfx_flight.frame += 1;
 }
 
 uint32_t voxel_gfx_dropped(void) {
@@ -499,6 +609,57 @@ const char *voxel_gfx_stats_line(void) {
     (unsigned long)textures_failed
   );
   return stats_line;
+}
+
+/*
+ * The frame the GPU is on, and the command the CPU last touched.
+ *
+ * `gpu` is the SUBMITTED frame: its index, how many of its draws were issued
+ * against how many it had, and their vertex and index totals. `cap` is the
+ * compiled-in draw cap or `-` for none.
+ *
+ * `walk` is the last command the walk REACHED, which is one of three things
+ * and the stage says which:
+ *
+ *   stage draw-walk        the command the walk stopped inside — a texture
+ *                          expansion, a bind, a buffer configuration.
+ *   stage anything else,   the last command of the frame: the walk finished.
+ *   no cap
+ *   a cap                  the first command the cap REFUSED, which is the
+ *                          next draw to admit when the bisect steps up.
+ */
+const char *voxel_gfx_trace_line(void) {
+  int32_t cap = voxel_gfx_max_draws();
+  char cap_text[12];
+  if (cap < 0) {
+    cap_text[0] = '-';
+    cap_text[1] = '\0';
+  } else {
+    snprintf(cap_text, sizeof cap_text, "%ld", (long)cap);
+  }
+  snprintf(
+    trace_line,
+    sizeof trace_line,
+    "gpu f%lu draws %lu/%lu verts %lu idx %lu cap %s "
+    "walk cmd %lu/%lu kind %u vfmt %u depth %u flags 0x%x page %u pal %u v %lu i %lu",
+    (unsigned long)voxel_gfx_flight.frame,
+    (unsigned long)voxel_gfx_flight.submitted,
+    (unsigned long)voxel_gfx_flight.offered,
+    (unsigned long)voxel_gfx_flight.verts,
+    (unsigned long)voxel_gfx_flight.indices,
+    cap_text,
+    (unsigned long)voxel_gfx_walk.index,
+    (unsigned long)voxel_gfx_walk.total,
+    (unsigned)voxel_gfx_walk.kind,
+    (unsigned)voxel_gfx_walk.vfmt,
+    (unsigned)voxel_gfx_walk.depth,
+    (unsigned)voxel_gfx_walk.flags,
+    (unsigned)voxel_gfx_walk.page,
+    (unsigned)voxel_gfx_walk.pal,
+    (unsigned long)voxel_gfx_walk.verts,
+    (unsigned long)voxel_gfx_walk.indices
+  );
+  return trace_line;
 }
 
 // ---------------------------------------------------------------------------

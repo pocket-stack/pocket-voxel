@@ -46,4 +46,26 @@ uint32_t voxel_gfx_dropped(void);
 /* One line of counters for the boot log, NUL-terminated. */
 const char *voxel_gfx_stats_line(void);
 
+/*
+ * What the GPU is actually chewing on, NUL-terminated.
+ *
+ * Two facts the counter line above cannot carry, both of which a wedge needs:
+ *
+ *   THE FRAME IN FLIGHT. voxel_gfx_stats_line() reports the crate's LAST
+ *   RECORD, and the frame loop records frame N before it waits for the GPU to
+ *   finish frame N-1 — so at a frame-begin wedge those counters describe the
+ *   frame that has NOT been submitted. This line describes the one that has.
+ *
+ *   WHERE THE WALK GOT TO. The command index, kind and page the walk last
+ *   reached. A CPU-side stop (a texture expansion, a bind) leaves it on the
+ *   command it stopped inside — the stage is `draw-walk` then. A GPU-side stop
+ *   leaves it at the last command of the submitted frame, which is where a
+ *   --max-draws bisect starts.
+ */
+const char *voxel_gfx_trace_line(void);
+
+/* The compiled-in draw cap: -1 for none, else how many draw commands per frame
+ * reach the GPU. Reported so a bisect build cannot be mistaken for a full one. */
+int32_t voxel_gfx_max_draws(void);
+
 #endif /* POCKETVOXEL_3DS_GFX_H */

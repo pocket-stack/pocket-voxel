@@ -12,6 +12,12 @@
 //                                              poll gap reads as time the
 //                                              process was not executing, so
 //                                              no wait ever charges the GPU
+//   bun tools/voxel-3ds.ts --sd-pak --cia --max-draws 4
+//                                              a device bisect binary: 1.3 MiB
+//                                              to push because the pak stays
+//                                              on the SD card, and only the
+//                                              first four draw commands of
+//                                              each frame reach the GPU
 //
 // The toolchain spans two environments, exactly as the PocketJS 3DS host's
 // does. The Rust half compiles on macOS: armv6k-nintendo-3ds is a built-in
@@ -54,6 +60,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { availableParallelism, homedir } from "node:os";
@@ -172,6 +179,12 @@ export interface VoxelThreeDsArguments {
   /** 1 writes sdmc:/pocketvoxel-3ds/hb.txt, 0 does not. */
   readonly heartbeat: number;
   readonly heartbeatTicks: number;
+  /** Draw commands per frame that reach the GPU; -1 is all of them. */
+  readonly maxDraws: number;
+  /** Read the pak from the SD card instead of embedding it in the package. */
+  readonly sdPak: boolean;
+  /** 1 presents the frame to the top screen, 0 queues no display transfer. */
+  readonly present: number;
   /** Everything unrecognized, forwarded to cargo. */
   readonly cargoArgs: readonly string[];
 }
@@ -180,7 +193,8 @@ const USAGE =
   "usage: bun tools/voxel-3ds.ts [--capture] [--cia] [--trace <path>] [--skip-bundle] " +
   "[--package-outdir <dir>] [--arena-mib N] [--banks N] [--texture-mib N] " +
   "[--heap-mib N] [--linear-mib N] [--frame-wait-ms N] [--poll-gap-ms N] " +
-  "[--wait-stall-ms N] [--heartbeat 0|1] [--heartbeat-ticks N] [cargo args…]";
+  "[--wait-stall-ms N] [--heartbeat 0|1] [--heartbeat-ticks N] [--max-draws N] " +
+  "[--present 0|1] [--sd-pak] [cargo args…]";
 
 function numberFlag(
   argv: readonly string[],
@@ -221,12 +235,16 @@ export function parseVoxelThreeDsArguments(
     "wait-stall-ms",
     "heartbeat",
     "heartbeat-ticks",
+    "max-draws",
+    "present",
   ]);
   const capture = argv.includes("--capture");
   const cargoArgs: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    if (a === "--capture" || a === "--cia" || a === "--skip-bundle") continue;
+    if (a === "--capture" || a === "--cia" || a === "--skip-bundle" || a === "--sd-pak") {
+      continue;
+    }
     if (a.startsWith("--") && valued.has(a.slice(2))) {
       i += 1;
       continue;
@@ -297,6 +315,26 @@ export function parseVoxelThreeDsArguments(
       "heartbeat-ticks",
       Number(process.env.PV3DS_HOST_HEARTBEAT_TICKS ?? 30),
     ),
+    // A frame that wedges the GPU wedges it on one command, and a halted
+    // console reports only that the queue never drained. Capping how many draw
+    // commands reach the GPU turns that into a bisection over the frame:
+    // --max-draws 0 submits the clear and the present with no command list at
+    // all (citro3d queues no GX_ProcessCommandList for an empty command
+    // buffer), so a wedge there is not in a draw; the N where a run stops
+    // surviving names the draw. Absent means no cap.
+    maxDraws: numberFlag(argv, "max-draws", -1),
+    // Where the pak comes from. RomFS is the default because it makes the pak
+    // and the binary that reads it one artifact — a run cannot pick up a stale
+    // pak. --sd-pak gives that up to make an attempt cheap: the package drops
+    // from 31.9 MiB to 1.3 MiB, which is a couple of seconds over the
+    // console's FTP instead of fifty.
+    sdPak: argv.includes("--sd-pak"),
+    // --present 0 unlinks the render target from the top screen, so
+    // C3D_FrameEnd queues no display transfer. Paired with --max-draws 0 it
+    // leaves a frame with one GX job in it, the clear's memory fill, which is
+    // the last split available over a queue wait that cannot name which of the
+    // three engines did not finish.
+    present: numberFlag(argv, "present", 1),
     cargoArgs,
   };
 }
@@ -766,6 +804,32 @@ export async function buildVoxel3ds(argv: readonly string[]): Promise<string> {
         "the other heap at zero bytes.",
     );
   }
+  // Both device-bisect knobs are refused on the capture binary, because both
+  // would silently produce goldens that are not the diorama: a draw cap leaves
+  // geometry out of every frame, and the e2e driver DELETES
+  // sdmc:/pocketvoxel-3ds before each run, which is where --sd-pak keeps the
+  // pak. A capture build is the golden path and takes neither.
+  if (args.capture && args.maxDraws >= 0) {
+    throw new Error(
+      "voxel 3ds: --max-draws caps what the GPU is given, so a capture build " +
+        "would dump frames with geometry missing. Drop --capture to make a " +
+        "bisect binary, or drop --max-draws to make goldens.",
+    );
+  }
+  if (args.capture && args.present === 0) {
+    throw new Error(
+      "voxel 3ds: --present 0 unlinks the render target, and the capture " +
+        "build's goldens were recorded with the frame presented. Drop " +
+        "--capture to make a diagnostic binary.",
+    );
+  }
+  if (args.capture && args.sdPak) {
+    throw new Error(
+      "voxel 3ds: --sd-pak keeps the pak in sdmc:/pocketvoxel-3ds, which " +
+        "tests/e2e/voxel-3ds.ts deletes before every run. A capture build " +
+        "embeds its pak in RomFS.",
+    );
+  }
 
   const imageId = await preflightContainer();
   const { rustup, toolchain } = await preflightRust();
@@ -863,6 +927,9 @@ export async function buildVoxel3ds(argv: readonly string[]): Promise<string> {
     PV3DS_HOST_WAIT_STALL_MS: String(args.waitStallMs),
     PV3DS_HOST_HEARTBEAT: String(args.heartbeat),
     PV3DS_HOST_HEARTBEAT_TICKS: String(args.heartbeatTicks),
+    PV3DS_HOST_MAX_DRAWS: String(args.maxDraws),
+    PV3DS_HOST_PRESENT: String(args.present),
+    PV3DS_HOST_PAK_SD: args.sdPak ? "1" : "0",
     PV3DS_CAPTURE: args.capture ? "1" : "",
     // Always explicit, never inherited: an unset variable would let a previous
     // run's tape linger in the object cache behind unchanged source mtimes,
@@ -879,7 +946,13 @@ export async function buildVoxel3ds(argv: readonly string[]): Promise<string> {
     PV3DS_CIA_UNIQUE_ID: ciaUniqueId(appId),
   };
 
-  const notes = [args.capture ? "capture" : "", args.cia ? "cia" : ""].filter(Boolean);
+  const notes = [
+    args.capture ? "capture" : "",
+    args.cia ? "cia" : "",
+    args.sdPak ? "sd pak" : "",
+    args.maxDraws >= 0 ? `max draws ${args.maxDraws}` : "",
+    args.present === 0 ? "no present" : "",
+  ].filter(Boolean);
   console.log(`voxel 3ds: make (${CONTAINER_IMAGE}${notes.length > 0 ? `, ${notes.join(", ")}` : ""})`);
   await runContainer(
     `make -j${availableParallelism()}`,
@@ -891,7 +964,19 @@ export async function buildVoxel3ds(argv: readonly string[]): Promise<string> {
   if (!existsSync(output)) {
     throw new Error(`voxel 3ds: the container build did not produce ${output}`);
   }
-  console.log(`output: ${output}`);
+  console.log(`output: ${output} (${(statSync(output).size / 1024 / 1024).toFixed(1)} MiB)`);
+  if (args.sdPak) {
+    // The one thing a --sd-pak build cannot do for itself. Printed with the
+    // pak's own path and size so the copy is one line to run, and repeated on
+    // every build because the guarantee it gives up is that the pak on the
+    // card and the binary reading it are the same artifact.
+    console.log(
+      `the pak is NOT in this package: copy ${PAK} ` +
+        `(${(statSync(pak).size / 1024 / 1024).toFixed(1)} MiB) once to the console at\n` +
+        "  sdmc:/pocketvoxel-3ds/voxelmon.vxpak\n" +
+        "and re-copy it after every `bun run cook` — nothing checks that it matches.",
+    );
+  }
   if (args.cia) {
     if (!existsSync(ciaOutput)) {
       throw new Error(`voxel 3ds: the container build did not produce ${ciaOutput}`);

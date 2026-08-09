@@ -55,6 +55,20 @@
 #                               path keeps the writes it was recorded with)
 #   PV3DS_HOST_HEARTBEAT_TICKS  the heartbeat's tick cadence; 0 leaves only the
 #                               stage-change writes
+#   PV3DS_HOST_MAX_DRAWS        how many draw commands per frame reach the GPU;
+#                               -1 is all of them. 0 submits the clear and the
+#                               present with no command list at all, so it
+#                               separates a wedge in a draw from one that is not
+#   PV3DS_HOST_PRESENT          1 links the render target to the top screen, so
+#                               C3D_FrameEnd queues a display transfer; 0 does
+#                               not, which with MAX_DRAWS=0 leaves the frame's
+#                               memory fill as the only GX job
+#   PV3DS_HOST_PAK_SD           1 reads the pak from
+#                               sdmc:/pocketvoxel-3ds/voxelmon.vxpak and leaves
+#                               it OUT of the package, which turns a 31.9 MiB
+#                               push into a 1.3 MiB one; 0 (the default) embeds
+#                               it in RomFS, where a run cannot pick up a
+#                               stale pak
 #
 # The tape and the marks travel INSIDE the binary: a capture run never reads
 # the emulator's filesystem for its input. Nothing is written outside
@@ -109,6 +123,9 @@ CFLAGS := -Wall -Wextra -O2 -g -std=gnu11 -mword-relocations -ffunction-sections
   -DPV3DS_HOST_WAIT_STALL_MS=$(PV3DS_HOST_WAIT_STALL_MS) \
   -DPV3DS_HOST_HEARTBEAT=$(PV3DS_HOST_HEARTBEAT) \
   -DPV3DS_HOST_HEARTBEAT_TICKS=$(PV3DS_HOST_HEARTBEAT_TICKS) \
+  -DPV3DS_HOST_MAX_DRAWS='($(PV3DS_HOST_MAX_DRAWS))' \
+  -DPV3DS_HOST_PRESENT=$(PV3DS_HOST_PRESENT) \
+  -DPV3DS_HOST_PAK_SD=$(PV3DS_HOST_PAK_SD) \
   -I$(PV3DS_APP_INCLUDE) -I$(PV3DS_PICA_INCLUDE) -I$(BUILD) \
   -I$(PV3DS_QUICKJS_DIR) -I$(DEVKITPRO)/libctru/include
 
@@ -176,14 +193,28 @@ $(ROMFS)/game.js: $(PV3DS_GAME_JS) | $(ROMFS)
 $(ROMFS)/voxelmon.vxpak: $(PV3DS_PAK) | $(ROMFS)
 	cp $< $@
 
+# What the packagers stage. Under PV3DS_HOST_PAK_SD the pak is not a
+# prerequisite AND has to be removed from the staged directory, because both
+# 3dsxtool and makerom build the image from whatever is in it — a leftover from
+# a RomFS build would silently make a 31.9 MiB package again and, worse, feed
+# the run a pak the SD path was meant to replace.
+ROMFS_FILES := $(ROMFS)/game.js
+ifeq ($(PV3DS_HOST_PAK_SD),1)
+ROMFS_PRUNE := rm -f $(ROMFS)/voxelmon.vxpak
+else
+ROMFS_FILES += $(ROMFS)/voxelmon.vxpak
+ROMFS_PRUNE := true
+endif
+
 # 3dsxtool refuses to embed a RomFS without SMDH metadata, so one is always
 # built.
 $(SMDH): $(ICON) | $(BUILD)
 	$(SMDHTOOL) --create "$(PV3DS_SMDH_TITLE)" "$(PV3DS_SMDH_DESC)" \
 	  "$(PV3DS_SMDH_AUTHOR)" $(ICON) $@
 
-$(OUT): $(ELF) $(SMDH) $(ROMFS)/game.js $(ROMFS)/voxelmon.vxpak
+$(OUT): $(ELF) $(SMDH) $(ROMFS_FILES)
 	mkdir -p $(dir $(OUT))
+	$(ROMFS_PRUNE)
 	$(THREEDSXTOOL) $(ELF) $@ --romfs=$(ROMFS) --smdh=$(SMDH)
 
 ifneq ($(CIA),)
@@ -216,8 +247,9 @@ $(CIA_STAMP): $(CIA_STAMP).probe ;
 # than Nintendo's retail ones, which is what Azahar installs. No banner is
 # passed — makerom needs one only for a title that plays an animated banner in
 # HOME Menu, and the SMDH already carries the icon and the title strings.
-$(CIA): $(ELF) $(SMDH) $(ROMFS)/game.js $(ROMFS)/voxelmon.vxpak $(RSF) $(CIA_STAMP)
+$(CIA): $(ELF) $(SMDH) $(ROMFS_FILES) $(RSF) $(CIA_STAMP)
 	mkdir -p $(dir $(CIA))
+	$(ROMFS_PRUNE)
 	$(PV3DS_MAKEROM) -f cia -o $@ -rsf $(RSF) -target t -exefslogo \
 	  -DAPP_TITLE="$(PV3DS_CIA_TITLE)" \
 	  -DAPP_PRODUCT_CODE="$(PV3DS_CIA_PRODUCT)" \

@@ -54,10 +54,65 @@
 #define TOP_SCREEN_H 240
 #define CAPTURE_BYTES ((size_t)TOP_SCREEN_W * TOP_SCREEN_H * 4)
 
-/* Everything the guest needs, staged into the .3dsx's RomFS by the Makefile.
- * RomFS rather than the SD card: one file to install, and the driver cannot
- * accidentally run against a stale pak sitting next to a fresh binary. */
+/*
+ * One directory for everything a run reads from and writes to the SD card. A
+ * capture build's is the directory the e2e driver wipes before every run; a
+ * playable build writes the same files to the same place, so a console that
+ * stopped is one directory to fetch over FTP rather than three paths to
+ * remember.
+ */
+#define OUT_DIR "sdmc:/pocketvoxel-3ds"
+#define REPORT_PATH OUT_DIR "/memory.txt"
+#define ERROR_PATH OUT_DIR "/error.txt"
+
+/*
+ * Where the pak comes from.
+ *
+ * RomFS is the default and the release path: the pak rides inside the .3dsx
+ * and the .cia, so there is one file to install and a run CANNOT pick up a
+ * stale pak sitting next to a fresh binary — the pak and the binary that reads
+ * it are the same artifact.
+ *
+ * PV3DS_HOST_PAK_SD=1 trades that guarantee for iteration speed. The pak is
+ * 30.6 MiB of a 31.9 MiB package; without it the package is 1.3 MiB, which is
+ * the difference between a 50-second FTP push per attempt and a couple of
+ * seconds. It is for bisecting a device failure, where the pak is the one part
+ * that is NOT changing between attempts and the binary is rebuilt every time.
+ * The cost is real and is the whole reason it is not the default: nothing then
+ * ties the pak on the card to the binary reading it, so a re-cook that is not
+ * re-pushed produces a run against yesterday's content with no sign of it.
+ *
+ * The guest bundle stays in RomFS either way. It is 163 KiB, so moving it buys
+ * nothing, and it is CODE that must match the host it was built with.
+ */
+#ifndef PV3DS_HOST_PAK_SD
+#define PV3DS_HOST_PAK_SD 0
+#endif
+
+/*
+ * Whether the frame is presented to the top screen.
+ *
+ * A frame hands the GX command queue up to three entries, from three different
+ * engines: the memory fill C3D_RenderTargetClear queues (PSC), the command
+ * list C3D_FrameEnd submits (P3D), and the display transfer that presents it
+ * (PPF). The queue wait only reports that all of them together did not finish.
+ *
+ * PV3DS_HOST_PRESENT=0 skips C3D_RenderTargetSetOutput, which leaves
+ * citro3d's linkedTarget[] empty, so C3D_FrameEnd queues no transfer at all.
+ * Together with PV3DS_HOST_MAX_DRAWS=0 — which leaves the command buffer empty,
+ * so C3Di_SplitFrame queues no command list either — that reduces a frame to
+ * the memory fill alone. The top screen then holds whatever was on it; the run
+ * is read through hb.txt, which is where a wedge is read from anyway.
+ */
+#ifndef PV3DS_HOST_PRESENT
+#define PV3DS_HOST_PRESENT 1
+#endif
+
+#if PV3DS_HOST_PAK_SD
+#define PAK_PATH OUT_DIR "/voxelmon.vxpak"
+#else
 #define PAK_PATH "romfs:/voxelmon.vxpak"
+#endif
 #define GUEST_PATH "romfs:/game.js"
 
 /*
@@ -162,8 +217,10 @@ static const u32 DISPLAY_TRANSFER_FLAGS =
 
 /* Everything the driver reads lives in one directory it deletes before every
  * run: Azahar has no working per-run isolation, so a previous run's files
- * would otherwise satisfy the count check and stale pixels get compared. */
-#define CAPTURE_DIR "sdmc:/pocketvoxel-3ds"
+ * would otherwise satisfy the count check and stale pixels get compared. That
+ * deletion is also why a capture build may not take its pak from the SD card —
+ * tools/voxel-3ds.ts refuses the pair. */
+#define CAPTURE_DIR OUT_DIR
 
 /* The PPF's own RGB8 staging buffer, and the A,B,G,R buffer the file holds. */
 #define CAPTURE_RGB_BYTES ((size_t)TOP_SCREEN_W * TOP_SCREEN_H * 3)
@@ -174,20 +231,6 @@ static u32 *capture_buffer;
 static u8 *capture_rgb;
 
 #endif /* PV3DS_CAPTURE */
-
-/*
- * One directory for everything a run leaves on the SD card. A capture build's
- * is the directory the e2e driver wipes before every run; a playable build
- * writes the same three files to the same place, so a console that stopped is
- * one directory to fetch over FTP rather than three paths to remember.
- */
-#ifdef PV3DS_CAPTURE
-#define OUT_DIR CAPTURE_DIR
-#else
-#define OUT_DIR "sdmc:/pocketvoxel-3ds"
-#endif
-#define REPORT_PATH OUT_DIR "/memory.txt"
-#define ERROR_PATH OUT_DIR "/error.txt"
 
 // ---------------------------------------------------------------------------
 // the stage breadcrumb and the heartbeat
@@ -311,6 +354,15 @@ static bool heartbeat_all_stages; /* every stage change writes, not only the cad
  * a run still waiting on that stage writes, so the file could not say whether
  * the deadline had fired.
  *
+ * TWO FRAMES ARE REPORTED, and the difference is the point. The counters after
+ * `rung` are the crate's LAST RECORD, and the loop records frame N before it
+ * waits for the GPU to finish frame N-1 — so at a frame-begin wedge they
+ * describe the frame that has NOT been submitted. The `gpu` group
+ * (voxel_gfx_trace_line) describes the frame that HAS been, which is the one
+ * the GPU is stuck on. The console's `tick 1 stage frame-begin … draws 9 verts
+ * 7336` was read as frame 0's shape and is frame 1's; frame 0's numbers were
+ * never written down anywhere.
+ *
  * A failed open returns silently. The heartbeat is a diagnostic and must never
  * be the thing that stops a run.
  */
@@ -323,13 +375,17 @@ static void heartbeat(const char *note) {
   if (file == NULL) return;
   fprintf(
     file,
-    "tick %lu stage %s scene %lu items %lu rung %lu %s%s%s\n",
+    "tick %lu stage %s scene %lu items %lu rung %lu %s %s present %d%s%s\n",
     (unsigned long)voxel_host_tick,
     stage_name(),
     (unsigned long)scene.scene_tick,
     (unsigned long)scene.draw_items,
     (unsigned long)scene.quality_tier,
     voxel_gfx_stats_line(),
+    voxel_gfx_trace_line(),
+    /* Next to `cap`, because the pair is what says which of the frame's three
+     * GX jobs this binary still submits. */
+    PV3DS_HOST_PRESENT,
     note == NULL ? "" : " WEDGED ",
     note == NULL ? "" : note
   );
@@ -394,7 +450,10 @@ static void report_memory(const char *stage, uint32_t arena_bytes) {
     file,
     "%s homebrew=%d runflags=0x%lx apt=%d memtype=%lu heap=%lu heap_used=%lu "
     "linear=%lu linear_free=%lu "
-    "app_size=%lu app_used=%lu system_size=%lu base_size=%lu arena=%lu\n",
+    "app_size=%lu app_used=%lu system_size=%lu base_size=%lu arena=%lu "
+    /* Which experiment this binary IS. A bisect build and a full one differ in
+     * nothing a person can see on the console, so the artifact says so. */
+    "pak=%s max_draws=%ld present=%d\n",
     stage,
     envIsHomebrew() ? 1 : 0,
     (unsigned long)envGetSystemRunFlags(),
@@ -408,7 +467,10 @@ static void report_memory(const char *stage, uint32_t arena_bytes) {
     (unsigned long)osGetMemRegionUsed(MEMREGION_APPLICATION),
     (unsigned long)osGetMemRegionSize(MEMREGION_SYSTEM),
     (unsigned long)osGetMemRegionSize(MEMREGION_BASE),
-    (unsigned long)arena_bytes
+    (unsigned long)arena_bytes,
+    PAK_PATH,
+    (long)voxel_gfx_max_draws(),
+    PV3DS_HOST_PRESENT
   );
   fclose(file);
 }
@@ -642,12 +704,12 @@ static bool frame_begin_bounded(void) {
 static void wedge(const char *waiting_for) {
   PvVox3dsStats scene;
   pv3ds_stats(&scene);
-  char message[448];
+  char message[704];
   snprintf(
     message,
     sizeof message,
     "%s within %lu ms of this thread running (ran %lu ms, stalled %lu ms in %lu gaps, "
-    "apt %d, runflags 0x%lx): stage %s, tick %lu, scene tick %lu, items %lu, %s",
+    "apt %d, runflags 0x%lx): stage %s, tick %lu, scene tick %lu, items %lu, %s, %s",
     waiting_for,
     (unsigned long)PV3DS_HOST_FRAME_WAIT_MS,
     WAIT_MS(wait_bound.ran),
@@ -659,7 +721,9 @@ static void wedge(const char *waiting_for) {
     (unsigned long)voxel_host_tick,
     (unsigned long)scene.scene_tick,
     (unsigned long)scene.draw_items,
-    voxel_gfx_stats_line()
+    voxel_gfx_stats_line(),
+    /* The frame the GPU is stuck on, not the one just recorded over it. */
+    voxel_gfx_trace_line()
   );
   heartbeat(waiting_for);
   fail(message);
@@ -670,7 +734,8 @@ static void wedge(const char *waiting_for) {
 // ---------------------------------------------------------------------------
 
 /*
- * Read a whole RomFS file into one buffer.
+ * Read a whole file into one buffer. `path` is a RomFS path or an sdmc: one —
+ * newlib routes both, so the pak's two homes need no second reader.
  *
  * `alignment` matters for the pak: pak::read borrows the vertex and index
  * pools in place and the cook 16-byte-aligns them against the file's own
@@ -678,7 +743,7 @@ static void wedge(const char *waiting_for) {
  * behind it. Callers of the guest source ask for a trailing NUL instead —
  * JS_Eval requires source[length] == '\0'.
  */
-static uint8_t *read_romfs_file(
+static uint8_t *read_asset_file(
   const char *path,
   size_t *length,
   size_t alignment,
@@ -956,7 +1021,14 @@ int main(void) {
     GPU_RB_DEPTH24_STENCIL8
   );
   if (target == NULL) fail("C3D_RenderTargetCreate failed");
+#if PV3DS_HOST_PRESENT
   C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
+#else
+  /* Unlinked: C3D_FrameEnd finds nothing in linkedTarget[] and queues no
+   * display transfer, which is the point. The flags are still the target's
+   * own contract and stay next to it. */
+  (void)DISPLAY_TRANSFER_FLAGS;
+#endif
 
   if (R_FAILED(romfsInit())) fail("romfsInit failed: the .3dsx has no romfs");
 
@@ -984,13 +1056,19 @@ int main(void) {
 
   stage_enter(STAGE_PAK);
   size_t pak_length = 0;
-  uint8_t *pak = read_romfs_file(PAK_PATH, &pak_length, 16, false);
+  uint8_t *pak = read_asset_file(PAK_PATH, &pak_length, 16, false);
   if (pak == NULL) {
-    char message[192];
+    char message[256];
     snprintf(
       message,
       sizeof message,
       "%s could not be read into a 16-aligned buffer "
+#if PV3DS_HOST_PAK_SD
+      /* This build takes the pak from the card, so the first thing to check is
+       * whether it is there — the binary carries no copy to fall back on. */
+      "(this build was made with --sd-pak: copy dist/voxelmon/voxelmon.vxpak to "
+      "the console at " OUT_DIR "/voxelmon.vxpak) "
+#endif
       "(heap %lu KiB, linear free %lu KiB, app region %lu KiB)",
       PAK_PATH,
       (unsigned long)(envGetHeapSize() / 1024),
@@ -1004,7 +1082,7 @@ int main(void) {
   if (pv3ds_load_pak(pak, (uint32_t)pak_length) != 0) fail(pv3ds_last_error());
 
   size_t guest_length = 0;
-  uint8_t *guest = read_romfs_file(GUEST_PATH, &guest_length, 1, true);
+  uint8_t *guest = read_asset_file(GUEST_PATH, &guest_length, 1, true);
   if (guest == NULL) fail(GUEST_PATH " is missing or unreadable");
 
   /* Everything large is now claimed — the arena, the 30.6 MiB pak, the guest
@@ -1013,12 +1091,18 @@ int main(void) {
 
 #ifndef PV3DS_CAPTURE
   printf(
-    "pak %lu KiB  arena %lu KiB x%lu\nheap %lu KiB  linear free %lu KiB\n",
+    "pak %lu KiB  arena %lu KiB x%lu\nheap %lu KiB  linear free %lu KiB\n"
+    /* Which build this is, on the screen of the console running it: a bisect
+     * binary and a full one are otherwise indistinguishable in the hand. */
+    "%s  max draws %ld  present %d\n",
     (unsigned long)(pak_length / 1024),
     (unsigned long)(arena_bytes / 1024),
     (unsigned long)ARENA_BANKS,
     (unsigned long)(envGetHeapSize() / 1024),
-    (unsigned long)(linearSpaceFree() / 1024)
+    (unsigned long)(linearSpaceFree() / 1024),
+    PAK_PATH,
+    (long)voxel_gfx_max_draws(),
+    PV3DS_HOST_PRESENT
   );
 #endif
 

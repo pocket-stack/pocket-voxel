@@ -370,16 +370,36 @@ that mesh's `vert_count`** (`pak.rs:561-566`), so a backend needs no clamping.
 
 **PICA200.** Same trick as the GE: `BufInfo_Add` with the vertex pointer already
 offset by `vert_base * 16`, then `C3D_DrawElements` over the raw index range.
-Two constraints replace the GE's:
+One constraint replaces the GE's, and it is not the one this section used to
+state:
 
-- `BufInfo_Add` rejects any pointer below physical `0x18000000` **(brief)**, so
-  neither pool can live in heap memory (§4.3).
-- **Indices must sit in the same linear block as the vertices, ABOVE them
-  (CONFIRMED on Azahar)** — `C3D_DrawElements` writes the index offset as
-  `phys(indices) - BufInfo.base_paddr`, and `base_paddr` is the first buffer
-  added, i.e. this draw's own vertex block. The staging arena allocates the two
-  in that order and every mark draws with the right topology; a wrong index base
-  would show as slivers spanning whole chunk meshes.
+- **`BufInfo.base_paddr` is the constant `0x18000000` — the base of FCRAM — not
+  the first buffer added.** Read out of the shipped `libcitro3d.a`
+  (`arm-none-eabi-ar x` then `objdump -d`, devkitARM in
+  `devkitpro/devkitarm:latest`): `BufInfo_Init` ends `mov r3, #0x18000000; str
+  r3, [r4]`, and nothing writes that field again. `BufInfo_Add` loads it,
+  `cmp`s the buffer's physical address against it, returns **−2** for anything
+  below (which is the "rejects any pointer below physical `0x18000000`" fact
+  **(brief)**, stated exactly), and stores `phys(data) - 0x18000000` as the
+  buffer's offset. `C3Di_BufInfoBind` then writes `GPUREG_ATTRIBBUFFERS_LOC`
+  (`0x000f0200`) as `base_paddr >> 3`, a fixed `0x03000000`.
+- `C3D_DrawElements` performs **the same subtraction against the same
+  constant**: `osConvertVirtToPhys(indices)`, `ldr` of `ctx->bufInfo.base_paddr`,
+  and `sub` before the value reaches `GPUREG_INDEXBUFFER_CONFIG` (`0x000f0227`,
+  with the u16/u8 selector in bit 31).
+
+So **the indices do not have to sit above the vertices**, and nothing about
+their position relative to this draw's vertex block matters: both are plain
+offsets from the base of FCRAM. The staging arena does allocate them in that
+order — every path in `lib.rs` stages vertices, then indices, into one bump
+arena — and that is fine, but it is not what makes the draw correct.
+
+What the same disassembly does establish is the failure mode when the index
+pointer is wrong: `C3D_DrawElements` compares the physical address against
+`base_paddr` and **returns without emitting anything** when it is lower, which
+is what `osConvertVirtToPhys` returning 0 produces for a non-linear pointer.
+A bad index pointer therefore **drops the draw silently** — a hole in the
+picture, the same signature as check 27 — and cannot hang the GPU.
 
 `detailDensity` shrinks `index_count` **and** `vert_count` on grass and flower
 meshes (`draw.rs:536-544`) because the cook packs those streams so that a prefix
@@ -573,8 +593,9 @@ CPU ~25 ms, and a boot-time copy reproduced neither effect
 (`gu/lib.rs:519-528`, `docs/VOXEL.md:558-575`).
 
 None of it survives. `BufInfo_Add` rejects any pointer below physical
-`0x18000000` **(brief)**, and the pak is heap memory, so **every vertex and
-index byte the PICA draws must be copied into `linearAlloc`**. The `FramePool`
+`0x18000000` **(brief)** — that number is `base_paddr`, and §2.4 has the
+disassembly — and the pak is heap memory, so **every vertex and index byte the
+PICA draws must be copied into `linearAlloc`**. The `FramePool`
 shape (`pool.rs`) is the model — bump arena, blocks retained across frames,
 `reset()` only after the GPU has consumed the frame (`pool.rs:39-43`) — with
 two adjustments: the 1 MB block assert (`pool.rs:19`, `pool.rs:49`) is sized for
@@ -705,6 +726,17 @@ walked against the corrected capture.
 | 10 | early depth test | **pass** — kept off; no rectangular occluders behind cards |
 | 11 | viewport after `C3D_FrameDrawOn` | **pass** — 7 px bars top and bottom carry the clear alone, so the letterbox is applied and the PICA clips primitives to the viewport rectangle |
 
+**Read against the hardware wedge, 2026-08-09.** Four things the wedge could
+have been were checked by reading rather than by running, three against
+devkitARM's own `libcitro3d.a`, and none of them is it:
+
+| suspect | what the reading says |
+|---|---|
+| the index base (§2.4) | `base_paddr` is the constant `0x18000000`, so index-above-vertex was never a requirement, and a bad index pointer makes `C3D_DrawElements` **return before emitting**, which drops a draw rather than hanging one |
+| the attribute permutations `0x021` / `0x20` (§2.3) | correct against both permutation conventions: `AttrInfo_AddLoader`'s maps attribute slot → shader register, `BufInfo_Add`'s maps buffer component → attribute slot. World: 4 B texcoord, 4 B colour, 6 B position in 16; flat: 12 B position, 4 B colour in 16, with attribute 1 fixed and given a value on every format change |
+| the command buffer | `C3D_Init(C3D_DEFAULT_CMDBUF_SIZE * 4)` is **1 MiB**; the wedged frame's 9 draws are on the order of 4 KiB of command words. `GPUCMD_Add` drops silently on overflow, which would truncate a list past its finish interrupt, but there are two orders of magnitude of room |
+| the arena rewind (§4.3) | `record` rotates the bank at tick N, and the bank it rewinds last held frame N−2, whose completion `frame-begin` proved at tick N−1. Two banks is enough and the order in `main.c` honours it |
+
 **Contract — one frame, compared against the rescaled oracle**
 
 12. **Card UV convention** (§3.3). A swapped v0/v1 draws every sprite upside
@@ -764,8 +796,12 @@ walked against the corrected capture.
 27. **Vertex or index data outside linear memory** (§4.3). `BufInfo_Add` refuses
     the pointer; the affected mesh silently does not draw. Whole chunks missing
     with everything else correct is the signature.
-28. **Indices in a different block from the vertices** (§4.3). Triangles fan to
-    the origin — long thin wedges from the world toward (0,0,0).
+28. **Indices outside linear memory** (§2.4). Not "in a different block from the
+    vertices", which this check used to say: the index offset is taken from the
+    base of FCRAM, so the two blocks are independent. An index pointer
+    `osConvertVirtToPhys` cannot resolve makes `C3D_DrawElements` return before
+    it emits anything, so the tell is the same as check 27 — that mesh is
+    missing and everything else is right.
 29. **Data cache not flushed before the draws** (§4.2). Intermittent: a mesh
     draws with a previous frame's contents, most visible on the pulled/staged
     geometry, and clears up if a debugger stalls the CPU between write and draw.
@@ -866,6 +902,59 @@ walked against the corrected capture.
     wait nothing. `error.txt` reports the split (`ran 1000 ms, stalled 6000 ms
     in 1 gaps`) along with `apt` and `runflags`, so the environment a console
     was in is a fact the next run leaves behind.
+
+36. **The counters on a wedge line described the wrong frame.** The loop is
+    `record(frame N)` → `gfx-prepare` → `frame-sync` → `frame-begin (waits for
+    frame N−1)`, so at a `frame-begin` wedge the crate's stats have **already
+    been overwritten by the frame that has not been submitted**. The console's
+    `tick 1 stage frame-begin … draws 9 verts 7336 idx 11004` is frame **1**;
+    the shape of frame 0, the frame the PICA200 was stuck on, was never written
+    down. Two counts now travel next to each other:
+
+    ```text
+    … drop a0 t0 w0 gpu f633 draws 14/14 verts 1455 idx 4590 cap - \
+      walk cmd 14/15 kind 1 vfmt 0 depth 1 flags 0xb page 52 pal 46 v 4 i 6
+    ```
+
+    `gpu` is the SUBMITTED frame — snapshotted at the end of the command walk,
+    so it survives the next record — and `walk` is the last command the walk
+    reached, with the kind, vertex format, depth mode, flags, page and palette
+    that name it. The stage says which of the two to read: at `draw-walk` the
+    CPU stopped inside that command; anywhere else the walk finished and the
+    GPU has the frame `gpu` describes. `tex N/N KiB` was already cumulative and
+    is the one number on the old line that did describe the run so far.
+
+37. **Bisecting which command wedges it.** `--max-draws N` submits only the
+    first N draw commands of each frame and reports the cap in `hb.txt`
+    (`cap N`), in `memory.txt`'s boot lines (`max_draws=N`) and on the bottom
+    screen, so a bisect binary cannot be mistaken for a full one. It is refused
+    on a capture build, which would otherwise record goldens with geometry
+    missing.
+
+    **`--max-draws 0` is the first split, and it separates three different
+    engines.** A frame's GX queue is exactly three entries: the memory fill
+    `C3D_RenderTargetClear` queues (PSC), the command list `C3D_FrameEnd`
+    submits (P3D), and the display transfer that presents it (PPF). All three
+    complete before `C3D_FrameBegin`'s queue wait returns, and that wait cannot
+    say which one did not. With no draws, `C3Di_SplitFrame` finds an empty
+    command buffer and **no `GX_ProcessCommandList` is queued at all** — so a
+    run that still wedges at 0 has no 3D work in it, and the fill or the
+    transfer is the one that stopped. Measured on Azahar at `--max-draws 0`:
+    633 ticks, `gpu f366 draws 0/14 verts 0 idx 0 cap 0`, `tex 0/0 KiB` (the cap
+    stops the walk before any texture is expanded), the run continuing.
+
+    **`--present 0` removes the third entry.** It skips
+    `C3D_RenderTargetSetOutput`, so citro3d's `linkedTarget[]` stays empty and
+    `C3D_FrameEnd`'s transfer loop finds nothing to present. With
+    `--max-draws 0` beside it a frame is the memory fill alone, and `hb.txt`
+    carries `cap 0 present 0` so one file says which of the three jobs the
+    binary still submits. Measured on Azahar: 638 ticks, no error file.
+
+    Above 0 the cap is a plain bisection over the frame's own command order,
+    which is the DrawList's order (§1.1): sky bands, terrain and its trees,
+    stamps, water, shadow decals, ghost, cards, grass, flower, UI. The `walk`
+    group names the first command the cap refused, so a run that survives at N
+    names the draw to admit next.
 
 ---
 
