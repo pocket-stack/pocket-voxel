@@ -1,5 +1,11 @@
 # ROM-derived content NEVER commits (docs/VOXEL.md §1): everything the
 # importer and cooker produce lives here.
+#
+# Both spellings on purpose: a trailing slash matches a DIRECTORY only, so a
+# `dist` SYMLINK — which is how a second worktree borrows one cooked pak
+# instead of re-cooking 32 MB — slips past `dist/` and lands in a commit.
+/dist
+/node_modules
 dist/
 target/
 node_modules/
