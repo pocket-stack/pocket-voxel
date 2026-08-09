@@ -10,7 +10,9 @@
     "shots": "bun tools/voxel.ts shots",
     "psp": "bun tools/voxel.ts psp --release",
     "vita": "bun tools/voxel.ts vita --release",
+    "3ds": "bun tools/voxel-3ds.ts",
     "e2e": "bun tests/e2e/voxel-ppsspp.ts",
+    "e2e:3ds": "bun tests/e2e/voxel-3ds.ts",
     "test": "bun test tests/",
     "tsc": "bunx tsc --noEmit -p ."
   },

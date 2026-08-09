@@ -1,18 +1,26 @@
 # The desktop-buildable workspace: the presentation core and the headless
 # sim host. The console crates stay standalone lone crates, exactly as they
-# were in the incubating repo (docs/VOXEL.md §2):
+# were in the incubating repo (docs/VOXEL.md §2) — one backend plus one
+# binary per machine, each on its own toolchain:
 #   crates/pocketvoxel-gu   PSP-only sceGu backend (cargo-psp toolchain)
 #   crates/pocketvoxel-psp  the EBOOT (cargo-psp; must live outside any
 #                           workspace — the hosts/psp rule)
 #   crates/pocketvoxel-gxm  Vita-only raw-GXM backend (cargo-vita toolchain)
 #   crates/pocketvoxel-vita the VPK (cargo-vita, same lone-bin rule)
+#   crates/pocketvoxel-pica 3DS-only PICA200 backend (armv6k-nintendo-3ds,
+#                           built with -Z build-std)
+#   crates/pocketvoxel-3ds  the 3DS staticlib the C host links (same target,
+#                           same build-std; owns the panic handler and the
+#                           global allocator)
 # vendor/ keeps the engine's own workspaces out of this one.
 [workspace]
 resolver = "2"
 members = ["crates/pocketvoxel-core", "crates/pocketvoxel-sim"]
 exclude = [
-    "crates/pocketvoxel-gxm",
+    "crates/pocketvoxel-3ds",
     "crates/pocketvoxel-gu",
+    "crates/pocketvoxel-gxm",
+    "crates/pocketvoxel-pica",
     "crates/pocketvoxel-psp",
     "crates/pocketvoxel-vita",
     "vendor",

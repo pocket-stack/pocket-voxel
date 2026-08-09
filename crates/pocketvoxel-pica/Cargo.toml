@@ -1,0 +1,42 @@
+# pocketvoxel-pica — the PICA200 (Nintendo 3DS) backend for the Pocket Voxel
+# DrawList, and the PICA200 sibling of crates/pocketvoxel-gu.
+#
+# STANDALONE CRATE: excluded from the root workspace, exactly like
+# pocketvoxel-gu — it is built for armv6k-nintendo-3ds with `-Z build-std`,
+# and workspace membership would drag that target into desktop
+# `cargo check/test`. Consumed as a path dep by the 3DS app crate.
+#
+# rlib, not staticlib: the app crate owns the `#[panic_handler]`, the
+# `#[global_allocator]` and the final link, so this crate declares neither
+# (the pocketvoxel-gu posture). Its `#[no_mangle]` C entry points survive
+# into the app's staticlib.
+#
+# Cross build (brief §0 — no .cargo/config.toml here, so `cargo test` stays
+# on the host):
+#   cargo +nightly build --release --target armv6k-nintendo-3ds \
+#     -Z build-std=core,alloc,compiler_builtins \
+#     -Z build-std-features=compiler-builtins-mem
+#
+# `pocketvoxel-core` arrives with `libm` for the device and, through the
+# dev-dependency below, additionally with `std` under `cargo test` — that is
+# what puts `pak::builder`/`pak::AlignedBlob` in reach of the host tests.
+
+[package]
+name = "pocketvoxel-pica"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+pocketvoxel-core = { path = "../pocketvoxel-core", default-features = false, features = ["libm"] }
+
+[dev-dependencies]
+pocketvoxel-core = { path = "../pocketvoxel-core", default-features = false, features = ["std"] }
+
+# The 3DS target defaults to unwind and has no unwinder (brief §0).
+[profile.release]
+opt-level = 3
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

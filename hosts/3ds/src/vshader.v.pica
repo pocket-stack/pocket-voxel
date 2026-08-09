@@ -1,0 +1,59 @@
+; Pocket Voxel PICA200 vertex shader.
+;
+; Two uniforms, both per command (crates/pocketvoxel-pica/include/
+; pocketvoxel_pica.h §6):
+;
+;   mtx      the command's matrix from PvPicaFrame.matrices, with the screen
+;            tilt already pre-multiplied over it by voxel_gfx.c. Row-major
+;            with each row's components reversed, which is C3D_Mtx.m[] order,
+;            which is what C3D_FVUnifMtx4x4 uploads.
+;   uvscale  PvPicaCmd.uv_scale — the pak's 1/32768 fixed point and the
+;            power-of-two texture envelope folded into one multiply. The PICA
+;            has no sceGuTexScale and no texture matrix.
+;
+; Three explicit conversions the PSP GE did implicitly, and the PICA does not
+; (docs/PICA.md §2.3, §4.1):
+;
+;   - positions are s16 WORLD PIXELS and convert as RAW INTEGERS, so the
+;     matrix carries no counter-scale and this shader applies none;
+;   - texcoords are s16 fixed point, scaled here by uvscale;
+;   - the colour attribute is 4 x GPU_UNSIGNED_BYTE and arrives as 0..255
+;     floats, so it is divided by 255 here. Leaving that out saturates every
+;     modulate and the whole diorama draws flat and bright (check 4).
+;
+; picasso freezes the PICA200 on two consecutive `mova` (none here), an
+; instruction may reference only one input register across its sources, and
+; only one constant register. Every line below reads at most one of each.
+;
+; A uniform may also only ever be the FIRST source: picasso rejects
+; `mul outtex.xy, intex.xy, uvscale.xy` with "invalid source2 register", so
+; both multiplies below put the uniform on the left. `mul` is commutative, so
+; that is a spelling and not a different result.
+
+.constf pvconst(0.0, 1.0, 0.0039215686274509803, 0.5)
+.alias  ones      pvconst.yyyy
+.alias  inv255    pvconst.zzzz
+
+.fvec mtx[4]
+.fvec uvscale
+
+.in inpos v0
+.in intex v1
+.in inclr v2
+
+.out outpos position
+.out outtex texcoord0
+.out outclr color
+
+.entry vmain
+.proc vmain
+    mov r0.xyz, inpos
+    mov r0.w,   ones
+    dp4 outpos.x, mtx[0], r0
+    dp4 outpos.y, mtx[1], r0
+    dp4 outpos.z, mtx[2], r0
+    dp4 outpos.w, mtx[3], r0
+    mul outtex.xy, uvscale.xy, intex.xy
+    mul outclr, inv255, inclr
+    end
+.end

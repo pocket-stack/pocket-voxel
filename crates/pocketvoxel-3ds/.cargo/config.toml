@@ -1,0 +1,21 @@
+# The 3DS target configuration, owned by the app crate (brief §0).
+# pocketvoxel-pica deliberately ships no config of its own so its tests stay on
+# the host; this crate is the one the C side links, so the target lives here and
+# `cargo +nightly build --release` in this directory is the whole cross build.
+#
+# `armv6k-nintendo-3ds` is a built-in rustc target with no precompiled std, so
+# core/alloc/compiler_builtins are built from source; `compiler-builtins-mem`
+# supplies memcpy/memset, which nothing else provides before libc is linked.
+#
+# Cargo discovers this file by walking up from the WORKING DIRECTORY, so a host
+# `cargo test` has to run from somewhere above it:
+#   cargo test --manifest-path crates/pocketvoxel-3ds/Cargo.toml   (from the repo root)
+# Running `cargo test` inside this directory would try to build the test
+# harness for the 3DS.
+
+[unstable]
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+
+[build]
+target = "armv6k-nintendo-3ds"

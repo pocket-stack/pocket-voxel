@@ -1,0 +1,51 @@
+# pocketvoxel-3ds — the Rust half of the Pocket Voxel 3DS runtime: the `voxel`
+# guest surface, the retained Scene, pak loading, and the per-present handover
+# to pocketvoxel-pica. The 3DS sibling of crates/pocketvoxel-psp (the EBOOT).
+#
+# STANDALONE CRATE: excluded from the root workspace, exactly like
+# pocketvoxel-gu / pocketvoxel-pica / pocketvoxel-psp — it is built for
+# armv6k-nintendo-3ds with `-Z build-std`, and workspace membership would drag
+# that target into desktop `cargo check/test`.
+#
+# staticlib, not rlib: this is the crate the C side links, so it owns the
+# `#[panic_handler]`, the `#[global_allocator]` and the `#[alloc_error_handler]`
+# that pocketvoxel-pica deliberately declares none of. Its own and pica's
+# `#[no_mangle]` entry points both land in libpocketvoxel_3ds.a.
+#
+# Cross build (brief §0; .cargo/config.toml carries the target and build-std):
+#   cargo +nightly build --release --locked
+#
+# Host tests run from the REPO ROOT so cargo does not pick up that config
+# (config discovery walks up from the working directory, not from the manifest):
+#   cargo test --manifest-path crates/pocketvoxel-3ds/Cargo.toml
+#
+# `pocketvoxel-core` arrives with `libm` for the device and, through the
+# dev-dependency below, additionally with `std` under `cargo test` — that is
+# what puts `pak::builder`/`pak::AlignedBlob` in reach of the host tests.
+
+[package]
+name = "pocketvoxel-3ds"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "pocketvoxel_3ds"
+crate-type = ["staticlib"]
+
+[dependencies]
+pocketvoxel-core = { path = "../pocketvoxel-core", default-features = false, features = ["libm"] }
+pocketvoxel-pica = { path = "../pocketvoxel-pica" }
+
+[dev-dependencies]
+pocketvoxel-core = { path = "../pocketvoxel-core", default-features = false, features = ["std"] }
+
+# The 3DS target defaults to unwind and has no unwinder (brief §0).
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
