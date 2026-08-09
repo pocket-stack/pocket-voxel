@@ -12,6 +12,7 @@ resolver = "2"
 members = ["crates/pocketvoxel-core", "crates/pocketvoxel-sim"]
 exclude = [
     "crates/pocketvoxel-gl",
+    "crates/pocketvoxel-gxm",
     "crates/pocketvoxel-gu",
     "crates/pocketvoxel-psp",
     "crates/pocketvoxel-vita",

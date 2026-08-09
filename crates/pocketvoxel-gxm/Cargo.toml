@@ -1,0 +1,35 @@
+# pocketvoxel-gxm — the raw-GXM backend for the Pocket Voxel DrawList.
+#
+# STANDALONE CRATE, like pocketvoxel-gu and the vitaGL backend it replaces:
+# it only builds for armv7-sony-vita-newlibeabihf, so workspace membership
+# would break desktop `cargo check/test`.
+#
+# Why this exists at all, when crates/pocketvoxel-gl already draws the same
+# list: vitaGL builds even its FIXED-FUNCTION shaders on the console at
+# runtime, which makes Sony's `libshacccg.suprx` a hard prerequisite and
+# breaks the one-file install every other Pocket app on this machine offers
+# (docs/VOXEL.md §12). GXM is the machine's own API and it is shader-only, so
+# the way to need no compiler is to bring shaders that are already compiled.
+# libvita2d's are, and `pocket3d-vita` — the sibling backend OpenStrike ships
+# — established both the technique and the provenance record for reusing
+# them. This crate follows it.
+#
+# The cost is that those five shaders are all we get: the textured program
+# carries no per-vertex colour and GXM has no fixed-function alpha test, so
+# the AO modulate becomes a second multiply-blended pass and cutouts are
+# resolved without a discard. Each is documented at its site.
+
+[package]
+name = "pocketvoxel-gxm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+pocketvoxel-core = { path = "../pocketvoxel-core" }
+# vita2d owns process-level GXM: the context, the shader patcher, the render
+# target, the depth buffer and the swap. This backend composes INSIDE its
+# frame, exactly as pocket3d-vita does, rather than standing up a second GXM
+# stack beside it.
+vita2d-sys = "0.1.1"
+vitasdk-sys = { version = "0.3.3", features = ["SceGxm_stub"] }
