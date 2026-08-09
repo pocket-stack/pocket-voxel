@@ -9,10 +9,12 @@
   <img src="docs/shots/psp-route-1.png" width="352" alt="Route 1: tall encounter grass, ledges, fences, and rows of carved trees." />
 </p>
 
-<p align="center"><em>All three screenshots are captures from a real PSP-2000 over PSPLINK.</em></p>
+<p align="center"><em>All three screenshots are captures from a real PSP-2000 over PSPLINK.
+The same build runs on a PS Vita at 960x544 — see <a href="#run-it">Run it</a>.</em></p>
 
-A Game Boy creature-RPG, presented as a voxelized 3D diorama on PSP-class
-hardware. The gameplay is a TypeScript port of the
+A Game Boy creature-RPG, presented as a voxelized 3D diorama on handheld
+hardware — **a real PSP and a real PS Vita, from one cooked pak and one
+guest bundle**. The gameplay is a TypeScript port of the
 [gen1recomp](https://github.com/bryanthaboi/gen1recomp) Lua engine running in
 an embedded QuickJS guest; the presentation is a Rust reimplementation of the
 [DramaticShape Voxel Mod](https://github.com/DramaticShape/DramaticShapeVoxelMod)
@@ -43,7 +45,7 @@ the running device, the same standard as the EBOOT's XMB art.
 ## How it works
 
 ```text
-cook time (Bun, your machine)            run time (PSP)
+cook time (Bun, your machine)            run time (PSP / PS Vita)
 ├─ import/  ROM → gen/ (SHA-1 gated)     ├─ QuickJS guest: the gameplay port,
 ├─ cook/    voxelizer: classify tiles,   │    one frame(buttons) per tick
 │    carve trees, place 42 building      ├─ voxel surface: ~10-40 ops/tick
@@ -59,8 +61,15 @@ cook time (Bun, your machine)            run time (PSP)
   flag: the same 31 MB pak serves the PSP rung (30 fps present lock, 60 Hz
   logic), the Vita rung, and the desktop identity rung — which replays the
   pre-ladder picture pixel-for-pixel and is pinned by committed frame hashes
-  no dial edit may move. The rung is named by the HOST, not the guest, so the
-  bundle in the VPK is byte-identical to the one in the EBOOT.
+  no dial edit may move. **The rung is named by the HOST, not the guest**, so
+  the guest bundle inside the Vita VPK is byte-identical to the one baked
+  into the PSP EBOOT — no `#ifdef`, no second build of the game.
+- **Each machine gets its own renderer, not its own fork.** Both consume the
+  same ordered draw list and resolve every texture's palette through the same
+  function: `pocketvoxel-gu` on the PSP's GE, `pocketvoxel-gxm` on the Vita's
+  GXM. The Vita draws it at native 960x544 while the logical viewport stays
+  the PSP's 480x272, so the layout, the cameras and every golden are
+  unchanged and only the pixel count moves.
 - **No camera-relative representation change inside the visible field.** The
   PSP rung pays its frame budget with uniform dials only (coarse-carved
   trees, ground baked to per-chunk pages, stratified detail density) — a
@@ -73,9 +82,8 @@ cook time (Bun, your machine)            run time (PSP)
 
 ## Quick start
 
-Needs [Bun](https://bun.sh), a Rust toolchain, and for device builds the
-[cargo-psp](https://github.com/overdrivenpotato/rust-psp) toolchain (resolved
-and pinned automatically by `tools/voxel.ts`).
+Needs [Bun](https://bun.sh) and a Rust toolchain. Device builds need one
+console toolchain each; both are covered under [Run it](#run-it).
 
 ```sh
 git clone --recursive https://github.com/pocket-stack/pocket-voxel
@@ -88,6 +96,16 @@ export VOXELMON_VOXELMOD=~/code/DramaticShapeVoxelMod  # and the tile profiles
 bun tools/voxel.ts import   # ROM → dist/voxelmon/gen/
 bun tools/voxel.ts cook     # gen/ → dist/voxelmon/voxelmon.vxpak
 bun tools/voxel.ts check    # replay the tapes, assert both rungs' hashes
+```
+
+## Run it
+
+### PSP
+
+Needs the [cargo-psp](https://github.com/overdrivenpotato/rust-psp) toolchain,
+which `tools/voxel.ts` resolves and pins for you.
+
+```sh
 bun tools/voxel.ts psp --release   # the EBOOT
 ```
 
@@ -97,10 +115,7 @@ served from `host0:`.
 
 ### PS Vita
 
-The Vita runs the same guest bundle and the same cooked pak; a second backend
-(`crates/pocketvoxel-gxm`, raw GXM) draws the same draw list at the native
-960x544 raster while the logical viewport stays 480x272. Needs
-[VitaSDK](https://vitasdk.org) and
+Needs [VitaSDK](https://vitasdk.org) and
 [cargo-vita](https://github.com/vita-rust/cargo-vita).
 
 ```sh
@@ -108,13 +123,23 @@ export VITASDK=~/vitasdk
 bun tools/voxel.ts vita --release   # dist/voxelmon/voxelmon.vpk
 ```
 
-The VPK carries the pak inside it, so installing that one file is the whole
-install: copy it to the console (VitaShell's `SELECT` starts USB or FTP),
-press `X` on it, confirm. The VPK is self-contained — it ships libvita2d's
-precompiled GXM shaders, so a stock HENkaku console needs nothing else on it.
+**The VPK carries the pak inside it and needs nothing else on the console.**
+Copy it over (VitaShell's `SELECT` starts USB or FTP), press `X` on it,
+confirm — that is the whole install. It ships libvita2d's precompiled GXM
+shaders, so a stock HENkaku console does not need Sony's runtime shader
+compiler (`libshacccg.suprx`) the way most Vita 3D homebrew does.
+
+One honest difference from the PSP picture: the GE cuts sprite art out with a
+hardware alpha test and **GXM has none**, so grass, flowers and entity
+billboards blend instead of clipping, and give up their baked ambient
+occlusion to do it. Solid geometry and the Game Boy UI layer are unaffected —
+[docs/VOXEL.md §12](docs/VOXEL.md) has the per-pass accounting.
+
+## Tests
 
 ```sh
-bun test                    # 208 tests; ROM-gated suites skip with a reason
+bun test                    # 226 tests; ROM-gated suites skip with a reason
+bun tools/voxel.ts check    # both quality rungs' frame hashes
 bun tests/e2e/voxel-ppsspp.ts   # GE-vs-sim parity at 11 story marks
 ```
 
