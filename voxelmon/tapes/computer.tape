@@ -26,16 +26,14 @@ press b
 press b
 mark pc-closed
 
-# Reopen from the same tile and take REMOTE PC. Both pages remain in the
-# native Pokémon text layer; the disconnected result never mounts local UI.
+# Reopen from the same tile and take REMOTE PC. With no mock stream the
+# modal shell stays WAITING and retries until B disconnects it.
 press a
 wait 180
 press d
 press a
-wait 180
-mark pc-remote-search
-press a
+wait 15
+mark pc-remote-waiting
+press b
 wait 4
-press a
-wait 120
-mark pc-remote-offline
+mark pc-remote-closed

@@ -526,6 +526,10 @@ export const EMOTE = {
 //     uiRect(x, y, w, h, abgr)             append a solid screen-pixel rect
 //     uiLabel(x, y, scale, abgr, str)      STRING arg; transparent 5x7 font
 //     uiOverlayClear()                     clear every retained overlay item
+//     remotePlane(x, y, w, h)              replace the retained remote-video
+//                                          plane; non-positive size hides it.
+//                                          Drawn before overlay rects so the
+//                                          guest can frame it with native ui
 //   battle
 //     arena(mapId, x, y, shape, rig)       stage at cell (x,y); ARENA_SHAPE,
 //                                          rig = 0 tele, 1 wide
@@ -619,6 +623,7 @@ export const VOX_OP = {
   uiRect: 55,
   uiLabel: 56,
   uiOverlayClear: 57,
+  remotePlane: 58,
 
   arena: 70,
   card: 71,

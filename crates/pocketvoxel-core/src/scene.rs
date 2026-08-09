@@ -91,6 +91,16 @@ pub struct UiOverlayRect {
     pub abgr: u32,
 }
 
+/// The one native-video destination rectangle. The frame source belongs to
+/// the host; the guest only positions its plane in native screen pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VideoPlane {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct UiOverlayLabel {
     pub x: i32,
@@ -185,6 +195,8 @@ pub struct Scene {
     pub ui_reveal: u32,
     /// Native screen-space commands composited after the GB UI layer.
     pub ui_overlay: Vec<UiOverlayItem>,
+    /// Native remote-video plane, drawn after the GB UI and before overlays.
+    pub video_plane: Option<VideoPlane>,
     pub battle: Battle,
     /// The quality rung this host climbed to (`spec::quality_tier`), always a
     /// valid index into [`spec::QUALITY`]. HOST configuration, not guest
@@ -220,6 +232,7 @@ impl Scene {
             ui_text: None,
             ui_reveal: u32::MAX,
             ui_overlay: Vec::new(),
+            video_plane: None,
             battle: Battle::default(),
             quality: QUALITY_TIER_DEFAULT,
             audio: Audio::new(),
@@ -491,6 +504,25 @@ impl Scene {
                 }
             }
             op::UI_OVERLAY_CLEAR => self.ui_overlay.clear(),
+            op::REMOTE_PLANE => {
+                // One op both replaces and hides the retained plane. Clip at
+                // the trust boundary before a backend sees the geometry.
+                if args.len() >= 4 {
+                    self.video_plane = None;
+                    let x0 = a(0).clamp(0, VIEW_W);
+                    let y0 = a(1).clamp(0, VIEW_H);
+                    let x1 = a(0).saturating_add(a(2).max(0)).clamp(0, VIEW_W);
+                    let y1 = a(1).saturating_add(a(3).max(0)).clamp(0, VIEW_H);
+                    if x1 > x0 && y1 > y0 {
+                        self.video_plane = Some(VideoPlane {
+                            x: x0,
+                            y: y0,
+                            w: x1 - x0,
+                            h: y1 - y0,
+                        });
+                    }
+                }
+            }
 
             op::ARENA => {
                 if args.len() >= 5 {
@@ -702,6 +734,44 @@ mod tests {
         assert_eq!(s.ui_overlay.len(), UI_OVERLAY_ITEMS_MAX);
         s.op(op::UI_OVERLAY_CLEAR, &[], None);
         assert!(s.ui_overlay.is_empty());
+    }
+
+    #[test]
+    fn remote_plane_replaces_clips_and_hides() {
+        let mut s = Scene::new();
+        s.op(op::REMOTE_PLANE, &[-10, 4, 40, i32::MAX], None);
+        assert_eq!(
+            s.video_plane,
+            Some(VideoPlane {
+                x: 0,
+                y: 4,
+                w: 30,
+                h: VIEW_H - 4,
+            })
+        );
+        s.op(op::REMOTE_PLANE, &[20, 30, 40, 50], None);
+        assert_eq!(
+            s.video_plane,
+            Some(VideoPlane {
+                x: 20,
+                y: 30,
+                w: 40,
+                h: 50,
+            })
+        );
+        s.op(op::REMOTE_PLANE, &[1, 2, 3], None);
+        assert_eq!(
+            s.video_plane,
+            Some(VideoPlane {
+                x: 20,
+                y: 30,
+                w: 40,
+                h: 50,
+            }),
+            "malformed op is a no-op"
+        );
+        s.op(op::REMOTE_PLANE, &[0, 0, 0, 20], None);
+        assert_eq!(s.video_plane, None, "non-positive size hides the plane");
     }
 
     #[test]

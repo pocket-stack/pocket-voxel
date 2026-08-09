@@ -230,6 +230,9 @@ pub enum Item {
         page: u16,
         tile: u16,
     },
+    /// The native host's latest remote-video frame, scaled into this screen
+    /// rectangle. The core owns only geometry; each backend owns the pixels.
+    VideoQuad { x: i32, y: i32, w: i32, h: i32 },
     /// A solid ABGR rectangle in native screen pixels. Overlay rectangles
     /// are the final pass; labels have already expanded into these runs.
     OverlayRect {
@@ -761,7 +764,16 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
 
     // 9. The GB UI layer.
     ui::append_ui(scene, pak, &mut items);
-    // 10. Native-pixel overlay, always after every GB UiQuad.
+    // 10. Native remote video: above the GB layer, below its window chrome.
+    if let Some(plane) = scene.video_plane {
+        items.push(Item::VideoQuad {
+            x: plane.x,
+            y: plane.y,
+            w: plane.w,
+            h: plane.h,
+        });
+    }
+    // 11. Native-pixel overlay, always after the video plane.
     ui::append_overlay(scene, &mut items);
 
     DrawList {
@@ -809,7 +821,8 @@ mod tests {
             Item::Ghost { .. } => 5,
             Item::Card { .. } => 6,
             Item::UiQuad { .. } => 9,
-            Item::OverlayRect { .. } => 10,
+            Item::VideoQuad { .. } => 10,
+            Item::OverlayRect { .. } => 11,
         }
     }
 
@@ -859,6 +872,7 @@ mod tests {
             None,
         );
         s.op(op::UI_TILE, &[2, 3, 5], None);
+        s.op(op::REMOTE_PLANE, &[30, 40, 320, 180], None);
         s.op(op::UI_RECT, &[8, 9, 10, 11, -1], None);
         let list = build(&s, &pak);
         assert_eq!(list.palette, -1, "no palette op = the grayscale ramp");
@@ -884,7 +898,13 @@ mod tests {
             .iter()
             .position(|i| matches!(i, Item::OverlayRect { .. }))
             .unwrap();
-        assert!(ui_at < overlay_at, "overlay follows the whole GB UI pass");
+        let video_at = list
+            .items
+            .iter()
+            .position(|i| matches!(i, Item::VideoQuad { .. }))
+            .unwrap();
+        assert!(ui_at < video_at, "video follows the whole GB UI pass");
+        assert!(video_at < overlay_at, "overlay frames the video plane");
         assert!(list.items.iter().any(|i| matches!(i, Item::Ghost { .. })));
         // Deterministic: the same scene builds the same list.
         let again = build(&s, &pak);

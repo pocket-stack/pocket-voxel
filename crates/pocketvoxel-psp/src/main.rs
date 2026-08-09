@@ -33,6 +33,7 @@
 
 extern crate alloc;
 
+mod remote;
 mod voxel;
 
 // The autopilot build borrows only the scripted-button half of capture.rs;
@@ -435,6 +436,7 @@ unsafe fn run() {
                 capture::log_line("mark: build");
                 let list = draw::build(scene, &pak);
                 renderer.reset_pool(); // GE idle: fully synced below, every mark
+                remote::present(&mut renderer);
                 capture::log_line("mark: record");
                 sys::sceGuStart(GuContextType::Direct, host::list_ptr());
                 renderer.render(&list, &pak);
@@ -478,6 +480,7 @@ unsafe fn run() {
             sys::sceGuSwapBuffers();
             let t_present = sys::sceKernelGetSystemTimeLow();
             renderer.reset_pool(); // GE idle: safe to rewind (pool contract)
+            remote::present(&mut renderer); // staged pixels commit only while GE-idle
             sys::sceGuStart(GuContextType::Direct, host::list_ptr());
             renderer.render(&list, &pak);
             let t_recorded = sys::sceKernelGetSystemTimeLow();

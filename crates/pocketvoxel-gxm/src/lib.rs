@@ -51,6 +51,7 @@
 
 mod atlas;
 pub mod gxm;
+mod video;
 
 use core::ffi::c_void;
 
@@ -197,6 +198,9 @@ pub struct Renderer {
     quad: Vec<FlatVert>,
     tex_quad: Vec<TexVert>,
     ui: Vec<TexVert>,
+    /// The companion's latest desktop frame. Its pixels are updated only in
+    /// the GPU-idle window owned by the Vita application shell.
+    remote_video: Option<video::VideoTexture>,
     /// Vertices restaged through the geometric-pull path this frame, and the
     /// draws issued. The frame loop's telemetry reads both.
     pub pull_verts_count: u32,
@@ -254,6 +258,7 @@ impl Renderer {
             quad: Vec::new(),
             tex_quad: Vec::new(),
             ui: Vec::new(),
+            remote_video: None,
             pull_verts_count: 0,
             draw_count: 0,
         })
@@ -321,6 +326,9 @@ impl Renderer {
                     // list, and the whole GB layer is one staged upload and
                     // one draw instead of ~100 of each.
                 }
+                Item::VideoQuad { .. } => {
+                    // Batched after the GB UI and before the window chrome.
+                }
                 Item::OverlayRect { .. } => {
                     // Batched after ui_batch so it composites over the
                     // complete GB layer without disturbing that fast path.
@@ -328,7 +336,41 @@ impl Renderer {
             }
         }
         self.ui_batch(pipeline, list, pak);
+        self.remote_video_quad(pipeline, list);
         self.overlay_batch(pipeline, list);
+    }
+
+    /// Commit a complete CLUT8 frame into the Vita's persistent RGBA video
+    /// texture. The application shell calls this immediately after
+    /// `vita2d_start_drawing`, where replacing or freeing GPU storage is safe.
+    pub unsafe fn update_remote_video(
+        &mut self,
+        w: u32,
+        h: u32,
+        palette: &[u8],
+        indices: &[u8],
+    ) -> bool {
+        if self
+            .remote_video
+            .as_ref()
+            .is_none_or(|texture| texture.geometry() != (w, h))
+        {
+            self.clear_remote_video();
+            let Ok(texture) = video::VideoTexture::new(w, h) else {
+                return false;
+            };
+            self.remote_video = Some(texture);
+        }
+        self.remote_video
+            .as_mut()
+            .is_some_and(|texture| texture.update(palette, indices))
+    }
+
+    /// Release remote-video storage in the same GPU-idle window.
+    pub unsafe fn clear_remote_video(&mut self) {
+        if let Some(texture) = self.remote_video.take() {
+            texture.free();
+        }
     }
 
     // -- textures ------------------------------------------------------------
@@ -634,6 +676,47 @@ impl Renderer {
         gxm::set_depth(DepthMode::Overlay);
         if pipeline.bind_tex(&logical_ortho().m, TexMode::Alpha) {
             pipeline.draw(staged, self.sequential.as_ptr().cast(), self.ui.len() as u32);
+            self.draw_count += 1;
+        }
+    }
+
+    /// Draw the host-owned desktop texture into the geometry retained by the
+    /// core. The following overlay batch supplies the Win98 frame and labels.
+    unsafe fn remote_video_quad(&mut self, pipeline: &gxm::Pipeline, list: &DrawList) {
+        let Some((x, y, w, h)) = list.items.iter().find_map(|item| match item {
+            Item::VideoQuad { x, y, w, h } => Some((*x, *y, *w, *h)),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(texture) = self.remote_video.as_ref() else {
+            return;
+        };
+
+        self.tex_quad.clear();
+        let corner = |px: i32, py: i32, u: f32, v: f32| TexVert {
+            u,
+            v,
+            x: px as f32,
+            y: py as f32,
+            z: 0.0,
+        };
+        let (x1, y1) = (x.saturating_add(w), y.saturating_add(h));
+        self.tex_quad.extend_from_slice(&[
+            corner(x, y, 0.0, 0.0),
+            corner(x1, y, 1.0, 0.0),
+            corner(x1, y1, 1.0, 1.0),
+            corner(x, y, 0.0, 0.0),
+            corner(x1, y1, 1.0, 1.0),
+            corner(x, y1, 0.0, 1.0),
+        ]);
+        let Some(staged) = stage(&self.tex_quad) else {
+            return;
+        };
+        v2d::sceGxmSetFragmentTexture(v2d::vita2d_get_context(), 0, texture.texture());
+        gxm::set_depth(DepthMode::Overlay);
+        if pipeline.bind_tex(&logical_ortho().m, TexMode::Opaque) {
+            pipeline.draw(staged, self.sequential.as_ptr().cast(), 6);
             self.draw_count += 1;
         }
     }

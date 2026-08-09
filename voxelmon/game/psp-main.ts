@@ -53,6 +53,10 @@ interface VoxelNative {
   uiRect(x: number, y: number, w: number, h: number, abgr: number): void;
   uiLabel(x: number, y: number, scale: number, abgr: number, str: string): void;
   uiOverlayClear(): void;
+  remotePlane?(x: number, y: number, w: number, h: number): void;
+  remoteOpen?(): boolean;
+  remoteTick?(): number;
+  remoteClose?(): void;
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void;
   card(side: number, pic: number, x: number, y: number): void;
   cardHide(side: number): void;
@@ -164,6 +168,18 @@ class QuickJsHost implements VoxelHost {
   }
   uiOverlayClear(): void {
     native.uiOverlayClear();
+  }
+  remotePlane(x: number, y: number, w: number, h: number): void {
+    native.remotePlane?.(x, y, w, h);
+  }
+  remoteOpen(): boolean {
+    return native.remoteOpen?.() ?? false;
+  }
+  remoteTick(): number {
+    return native.remoteTick?.() ?? -1;
+  }
+  remoteClose(): void {
+    native.remoteClose?.();
   }
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void {
     native.arena(mapId, x, y, shape, rig);

@@ -235,6 +235,22 @@ fn draw_overlay_rect(frame: &mut Frame, x: i32, y: i32, w: i32, h: i32, abgr: u3
     }
 }
 
+/// The sim has no live host stream. A deterministic dark checkerboard keeps
+/// the plane visible in screenshots and goldens without pretending it is a
+/// captured frame; device backends replace this entire item with live pixels.
+fn draw_video_placeholder(frame: &mut Frame, x: i32, y: i32, w: i32, h: i32) {
+    let x0 = x.clamp(0, W as i32) as usize;
+    let y0 = y.clamp(0, H as i32) as usize;
+    let x1 = x.saturating_add(w.max(0)).clamp(0, W as i32) as usize;
+    let y1 = y.saturating_add(h.max(0)).clamp(0, H as i32) as usize;
+    for py in y0..y1 {
+        for px in x0..x1 {
+            let cell = ((px - x0) / 8 + (py - y0) / 8) & 1;
+            frame.color[py * W + px] = if cell == 0 { 0xff20_1810 } else { 0xff30_2818 };
+        }
+    }
+}
+
 fn draw_clip_tri(
     frame: &mut Frame,
     tri: [PV; 3],
@@ -618,6 +634,9 @@ pub fn render(list: &DrawList, pak: &Pak, cache: &AtlasCache) -> Frame {
                     }
                 }
             }
+            Item::VideoQuad { x, y, w, h } => {
+                draw_video_placeholder(&mut frame, *x, *y, *w, *h);
+            }
             Item::OverlayRect { x, y, w, h, abgr } => {
                 draw_overlay_rect(&mut frame, *x, *y, *w, *h, *abgr);
             }
@@ -750,5 +769,18 @@ mod tests {
         );
         draw_overlay_rect(&mut frame, 0, 1, 1, 1, 0x8000_ff00);
         assert_eq!(frame.color[W], 0xff00_807f, "green blends over red");
+    }
+    #[test]
+    fn video_placeholder_is_clipped_and_checkered() {
+        let mut frame = Frame::new();
+        draw_video_placeholder(&mut frame, -4, 2, 20, 18);
+        let changed = frame
+            .color
+            .iter()
+            .filter(|&&c| c == 0xff20_1810 || c == 0xff30_2818)
+            .count();
+        assert_eq!(changed, 16 * 18);
+        assert_eq!(frame.color[2 * W], 0xff20_1810);
+        assert_eq!(frame.color[2 * W + 8], 0xff30_2818);
     }
 }

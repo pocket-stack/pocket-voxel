@@ -15,6 +15,11 @@ import type { BattleUi } from "./battle/ui.ts";
 import type { VoxelmonData } from "./data.ts";
 import type { VoxelHost } from "./host.ts";
 import { emitPcDesktop, type PcDesktopSource } from "./ui/pc-desktop.ts";
+import {
+  emitRemoteDesktop,
+  REMOTE_VIDEO_PLANE,
+  type RemotePcSource,
+} from "./ui/remote-desktop.ts";
 import { computeNeighbors, type Overworld } from "./world/overworld.ts";
 import { NPC } from "./world/npc.ts";
 import type { Textbox } from "./world/textbox.ts";
@@ -87,6 +92,8 @@ export interface SceneView {
   uiChoice(): ChoiceSource | null;
   /** Topmost bedroom-PC desktop, if any (screen-space native overlay). */
   pcDesktop(): PcDesktopSource | null;
+  /** Topmost remote-PC shell, if any (host video + native overlay chrome). */
+  remotePc(): RemotePcSource | null;
   /** The active battle, if any — the scene then stages the arena and hands
    * the GB tile layer to the battle ui. */
   battleView(): BattleSceneView | null;
@@ -145,6 +152,8 @@ export class Scene {
   private choiceH = 0;
   private pcOwner: PcDesktopSource | null = null;
   private pcRevision = -1;
+  private remoteOwner: RemotePcSource | null = null;
+  private remoteRevision = -1;
   // battle staging deltas (docs/VOXEL.md §4 battle ops)
   private battleActive = false;
   private arenaStaged = false;
@@ -587,6 +596,30 @@ export class Scene {
   }
 
   private emitPcOverlay(view: SceneView): void {
+    const remote = view.remotePc();
+    if (remote) {
+      this.pcOwner = null;
+      this.pcRevision = -1;
+      if (remote === this.remoteOwner && remote.revision === this.remoteRevision) return;
+      this.host.uiOverlayClear();
+      this.host.remotePlane(
+        REMOTE_VIDEO_PLANE.x,
+        REMOTE_VIDEO_PLANE.y,
+        REMOTE_VIDEO_PLANE.w,
+        REMOTE_VIDEO_PLANE.h,
+      );
+      emitRemoteDesktop(this.host, remote);
+      this.remoteOwner = remote;
+      this.remoteRevision = remote.revision;
+      return;
+    }
+    if (this.remoteOwner) {
+      this.host.remotePlane(0, 0, 0, 0);
+      this.host.uiOverlayClear();
+      this.remoteOwner = null;
+      this.remoteRevision = -1;
+    }
+
     const source = view.pcDesktop();
     if (!source) {
       if (this.pcOwner) {

@@ -31,6 +31,7 @@ import {
   type PcDesktopSource,
   type PcPartyRow,
 } from "./ui/pc-desktop.ts";
+import type { RemotePcSource, RemotePcStatus } from "./ui/remote-desktop.ts";
 import {
   Scene,
   type BattleSceneView,
@@ -288,6 +289,71 @@ class PcDesktopState implements GameState, PcDesktopSource {
 
   private close(playPress = true): void {
     if (playPress) this.game.audio.playSfx("Press_AB");
+    this.game.audio.playSfx("Turn_Off_PC");
+    this.game.pop();
+  }
+}
+
+/** Retry cadence for an absent host stream. One attempt per half-second keeps
+ * device I/O cheap while still making a daemon started after the modal opens
+ * appear without leaving and re-entering the PC. */
+const REMOTE_OPEN_RETRY_TICKS = 30;
+
+/**
+ * The remote bedroom computer. This is a real modal stack state like the
+ * local desktop: the overworld stays frozen, while the host owns stream I/O
+ * and the guest owns only WAITING/LIVE presentation and close policy.
+ */
+class RemotePcState implements GameState, RemotePcSource {
+  readonly kind = "pc-remote";
+  revision = 0;
+  status: RemotePcStatus = "waiting";
+  frameIndex = -1;
+  private opened = false;
+  private retryIn = 0;
+
+  constructor(private game: VoxelmonGame) {}
+
+  update(): void {
+    const input = this.game.input;
+    if (input.wasPressed("b") || input.wasPressed("start")) {
+      this.close();
+      return;
+    }
+
+    if (!this.opened) {
+      if (this.retryIn > 0) {
+        this.retryIn -= 1;
+        return;
+      }
+      this.opened = this.game.host.remoteOpen();
+      this.retryIn = REMOTE_OPEN_RETRY_TICKS;
+      if (!this.opened) return;
+    }
+
+    const frameIndex = this.game.host.remoteTick();
+    if (frameIndex === -2) {
+      this.game.host.remoteClose();
+      this.opened = false;
+      this.retryIn = REMOTE_OPEN_RETRY_TICKS;
+      this.frameIndex = -1;
+      if (this.status !== "waiting") {
+        this.status = "waiting";
+        this.revision += 1;
+      }
+      return;
+    }
+    this.frameIndex = frameIndex;
+    const status: RemotePcStatus = frameIndex >= 0 ? "live" : "waiting";
+    if (status !== this.status) {
+      this.status = status;
+      this.revision += 1;
+    }
+  }
+
+  private close(): void {
+    this.game.audio.playSfx("Press_AB");
+    this.game.host.remoteClose();
     this.game.audio.playSfx("Turn_Off_PC");
     this.game.pop();
   }
@@ -621,9 +687,9 @@ export class VoxelmonGame implements OverworldShell, SceneView {
 
   /**
    * OpenRedsPC replacement for this runtime's bedroom: choose a data source in
-   * the game's native dialogue first, then mount the local shell as a modal
-   * state. The remote branch is deliberately explicit and never falls back to
-   * local when no mock host is online.
+   * the game's native dialogue first, then mount either shell as a modal
+   * state. The remote state retries its host stream in place and never falls
+   * back to local when no daemon is online.
    */
   openBedroomComputer(): void {
     this.audio.playSfx("Turn_On_PC");
@@ -633,9 +699,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         this.push(new PcDesktopState(this));
         return;
       }
-      this.showText("PALLETNET is\nsearching for a\nremote PC...\fNo remote PC is\nonline.", () => {
-        this.audio.playSfx("Turn_Off_PC");
-      });
+      this.push(new RemotePcState(this));
     });
   }
 
@@ -730,6 +794,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   pcDesktop(): PcDesktopSource | null {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "pc-desktop" ? (top as PcDesktopState) : null;
+  }
+
+  remotePc(): RemotePcSource | null {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "pc-remote" ? (top as RemotePcState) : null;
   }
 
   battleView(): BattleSceneView | null {

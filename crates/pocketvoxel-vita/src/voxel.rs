@@ -199,6 +199,7 @@ op_fn!(js_ui_reveal, op::UI_REVEAL, 1);
 op_fn!(js_ui_clear, op::UI_CLEAR, 0);
 op_fn!(js_ui_rect, op::UI_RECT, 5);
 op_fn!(js_ui_overlay_clear, op::UI_OVERLAY_CLEAR, 0);
+op_fn!(js_remote_plane, op::REMOTE_PLANE, 4);
 op_fn!(js_arena, op::ARENA, 5);
 op_fn!(js_card, op::CARD, 4);
 op_fn!(js_card_hide, op::CARD_HIDE, 1);
@@ -261,6 +262,39 @@ unsafe extern "C" fn js_stats(
     JS_UNDEFINED
 }
 
+/// Bind the Mac companion's fixed desktop stream. Discovery is asynchronous,
+/// so false asks the guest's modal state to retry rather than failing boot.
+unsafe extern "C" fn js_remote_open(
+    ctx: *mut JSContext,
+    _this: JSValue,
+    _argc: i32,
+    _argv: *mut JSValue,
+) -> JSValue {
+    JS_NewBool(ctx, crate::remote::open())
+}
+
+/// Stage the newest network frame and report the last one committed in the
+/// GPU-idle window; -1 means the first picture has not arrived yet and -2
+/// asks the guest to close and retry after a disconnect or stream replacement.
+unsafe extern "C" fn js_remote_tick(
+    ctx: *mut JSContext,
+    _this: JSValue,
+    _argc: i32,
+    _argv: *mut JSValue,
+) -> JSValue {
+    JS_NewInt32(ctx, crate::remote::tick())
+}
+
+unsafe extern "C" fn js_remote_close(
+    _ctx: *mut JSContext,
+    _this: JSValue,
+    _argc: i32,
+    _argv: *mut JSValue,
+) -> JSValue {
+    crate::remote::close();
+    JS_UNDEFINED
+}
+
 unsafe fn dispatch_string<const N: usize>(
     ctx: *mut JSContext,
     argc: i32,
@@ -314,6 +348,9 @@ pub unsafe fn register(ctx: *mut JSContext, global: JSValue) {
     add_fn(ctx, obj, b"gamedata\0", js_gamedata, 0);
     add_fn(ctx, obj, b"audiodata\0", js_audiodata, 0);
     add_fn(ctx, obj, b"stats\0", js_stats, 0);
+    add_fn(ctx, obj, b"remoteOpen\0", js_remote_open, 0);
+    add_fn(ctx, obj, b"remoteTick\0", js_remote_tick, 0);
+    add_fn(ctx, obj, b"remoteClose\0", js_remote_close, 0);
     add_fn(ctx, obj, b"reset\0", js_reset, 0);
     add_fn(ctx, obj, b"mapShow\0", js_map_show, 4);
     add_fn(ctx, obj, b"mapHide\0", js_map_hide, 1);
@@ -333,6 +370,7 @@ pub unsafe fn register(ctx: *mut JSContext, global: JSValue) {
     add_fn(ctx, obj, b"uiRect\0", js_ui_rect, 5);
     add_fn(ctx, obj, b"uiLabel\0", js_ui_label, 5);
     add_fn(ctx, obj, b"uiOverlayClear\0", js_ui_overlay_clear, 0);
+    add_fn(ctx, obj, b"remotePlane\0", js_remote_plane, 4);
     add_fn(ctx, obj, b"arena\0", js_arena, 5);
     add_fn(ctx, obj, b"card\0", js_card, 4);
     add_fn(ctx, obj, b"cardHide\0", js_card_hide, 1);

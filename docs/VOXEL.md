@@ -128,8 +128,8 @@ tick: `frame(buttons)`, exactly once.
   shader-bound passes): sky bands → terrain chunks, each followed by its own
   tree mesh at the level of detail this rung picked (§4a) → water (flat,
   animated atlas) → shadow decals → player ghost (inverted depth, no write) →
-  entity cards → grass mesh → flower mesh → GB UI quads → native overlay
-  rectangles.
+  entity cards → grass mesh → flower mesh → GB UI quads → optional
+  host-video quad → native overlay rectangles.
 
 Per-frame boundary traffic is **~10–40 ops** (camera + moving entities +
 a reveal counter); menu opens burst a few hundred `ui*` ops once. Against the
@@ -164,6 +164,11 @@ drift guard — the `mon-spec.ts` discipline unchanged. Op groups:
   capped at the core boundary, then composite them after the GB UI. The
   bedroom PC uses this layer for its centred colour window while leaving the
   world visible around it.
+- **host video** — `remotePlane(x, y, w, h)` retains one destination rectangle
+  between the GB UI and the native overlay. The guest owns only its geometry
+  and the modal `WAITING`/`LIVE` state. `remoteOpen()`, `remoteTick()` and
+  `remoteClose()` bind a host-owned video-only stream; no captured audio enters
+  the chip-synth path. A non-positive plane size removes it.
 - **battle** — `arena(mapId, x, y, shape, rig)`, `card(side, pic, x, y)`,
   `cardHide(side)`, `battleCam(orbit, pitch, zoom)`, `arenaEnd()`. The two
   solved camera rigs (tele / wide) and the spread correction come from the
@@ -409,6 +414,31 @@ Events are the standard packed batch wire (`u16 kind | u16 a | i32 b | i32 c
 | i32 d`) with **no kinds defined yet** — the core currently states no fact
 the guest does not already know. The channel exists so mesh-streaming or
 host-side timing facts can append later without a wire change.
+
+### 4b. The remote-computer stream
+
+The macOS companion captures one selected AVFoundation screen through FFmpeg,
+scales it to a **512×128 RGB332 CLUT8 frame at 12 fps**, and assigns each
+file session or PKNT connection a non-zero stream epoch. The stored frame is
+anamorphic: the device stretches it into the bedroom PC's 360×180 plane,
+restoring the captured display's proportions while keeping each update near
+65 KiB. The fixed-size
+eight-slot ring bounds both disk use and reader work.
+
+PPSSPP and PSPLINK use the PocketJS service filesystem at
+`pocket-svc/voxelmon/media/desktop.pkst`. The PSP reads at most 26 KiB per
+game tick, validates a slot sequence before and after the chunked read, and
+copies complete CLUT8 pixels into persistent GE memory only after `sceGuSync`.
+The Vita uses PocketJS's PKNT transport over Wi-Fi: `streamOpen` installs the
+same ring image in RAM and video slots use latest-only backpressure. Network
+discovery and screen broadcast are enabled only by the daemon's explicit
+`--tcp` option; the default daemon writes only to the local PPSSPP/usbhostfs
+directory.
+
+The companion unlinks `desktop.pkst` when capture stops because the ring holds
+recent screenshots. Selecting the remote PC freezes the overworld in a normal
+modal game state, retries an absent companion without falling back to the local
+mock desktop, and releases the host stream on `B` or `START`.
 
 ## 5. The asset pipeline
 

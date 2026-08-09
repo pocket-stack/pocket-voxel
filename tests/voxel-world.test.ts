@@ -378,22 +378,70 @@ describe("bedroom computer", () => {
     expect(host.text()).toContain("MON6  L5");
   });
 
-  test.skipIf(!hasGen)("remote PC reports offline in native dialogue and never falls back local", () => {
-    const game = makeGame();
+  test.skipIf(!hasGen)("remote PC retries, becomes live, freezes the world, and closes cleanly", () => {
+    const host = new RecorderHost();
+    const game = new VoxelmonGame(romData!, host, 1);
+    game.newGame();
     openBedroomPcChoice(game);
     tap(game, VOX_BTN.down);
     expect(game.uiChoice()?.selected).toBe(1);
     tap(game, VOX_BTN.a);
     idle(game, 15);
 
-    expect(game.stackKinds()).toEqual(["overworld", "textbox"]);
+    expect(game.stackKinds()).toEqual(["overworld", "pc-remote"]);
     expect(game.pcDesktop()).toBeNull();
-    const text = game
-      .uiBox()!
-      .box.pages.flatMap((page) => page.lines)
-      .join(" ");
-    expect(text).toContain("remote PC");
-    expect(text).toContain("online");
+    expect(game.remotePc()).toMatchObject({ status: "waiting", frameIndex: -1 });
+    expect(host.remoteOpenCalls).toBeGreaterThanOrEqual(1);
+    expect(host.text()).toContain(`o ${VOX_OP.remotePlane} `);
+
+    const p = game.overworld.player;
+    const parked = [p.cellX, p.cellY, p.landedCount];
+    host.remoteAvailable = true;
+    idle(game, 31);
+    expect(host.remoteOpenCalls).toBeGreaterThanOrEqual(2);
+    expect(host.remoteTickCalls).toBeGreaterThanOrEqual(1);
+    host.remoteFrame = 42;
+    game.tick(0);
+    expect(game.remotePc()).toMatchObject({ status: "live", frameIndex: 42 });
+    expect([p.cellX, p.cellY, p.landedCount]).toEqual(parked);
+
+    const opensBeforeTerminal = host.remoteOpenCalls;
+    const revisionAtLive = game.remotePc()!.revision;
+    host.remoteFrame = -2;
+    game.tick(0);
+    expect(game.remotePc()).toMatchObject({ status: "waiting", frameIndex: -1 });
+    expect(game.remotePc()!.revision).toBe(revisionAtLive + 1);
+    expect(host.remoteCloseCalls).toBe(1);
+    expect(host.remoteOpenCalls).toBe(opensBeforeTerminal);
+
+    // A terminal stream is closed immediately, then retried on the same
+    // 30-tick cadence as a host that was absent when the modal opened.
+    idle(game, 30);
+    expect(host.remoteOpenCalls).toBe(opensBeforeTerminal);
+    game.tick(0);
+    expect(host.remoteOpenCalls).toBe(opensBeforeTerminal + 1);
+    expect(game.remotePc()).toMatchObject({ status: "waiting", frameIndex: -1 });
+    host.remoteFrame = 84;
+    game.tick(0);
+    expect(game.remotePc()).toMatchObject({ status: "live", frameIndex: 84 });
+    expect(game.remotePc()!.revision).toBe(revisionAtLive + 2);
+    expect([p.cellX, p.cellY, p.landedCount]).toEqual(parked);
+
+    tap(game, VOX_BTN.b);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+    expect(game.remotePc()).toBeNull();
+    expect(host.remoteCloseCalls).toBe(2);
+    expect(host.text()).toContain(`o ${VOX_OP.remotePlane} 0 0 0 0`);
+
+    // START owns the exact same teardown path, including remoteClose.
+    openBedroomPcChoice(game);
+    tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.a);
+    idle(game, 15);
+    expect(game.stackKinds()).toEqual(["overworld", "pc-remote"]);
+    tap(game, VOX_BTN.start);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+    expect(host.remoteCloseCalls).toBe(3);
   });
 });
 

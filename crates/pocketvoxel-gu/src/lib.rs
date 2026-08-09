@@ -43,6 +43,7 @@ extern crate alloc;
 
 pub mod pool;
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 
@@ -153,6 +154,22 @@ const UI_VTYPE: VertexType = VertexType::from_bits_truncate(
         | VertexType::TRANSFORM_2D.bits(),
 );
 
+/// Persistent, 16-byte-aligned CLUT backing. `sceGuClutLoad` reads it after
+/// the display list has been kicked, so it cannot live in the frame pool.
+#[repr(C, align(16))]
+struct RemotePalette([u32; 256]);
+
+/// The Mac desktop plane. Geometry is stable for a session; `update` only
+/// overwrites these persistent bytes inside the frame loop's GE-idle window.
+struct RemoteTexture {
+    w: i32,
+    h: i32,
+    palette: Box<RemotePalette>,
+    /// u128 gives the index plane the same 16-byte alignment as pak texels.
+    pixels: Vec<u128>,
+    pixel_bytes: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Matrices
 // ---------------------------------------------------------------------------
@@ -238,6 +255,10 @@ pub struct Renderer {
     tint: u32,
     /// The frame's SGB palette selection (DrawList.palette; -1 = GB ramp).
     palette: i32,
+    /// Device-owned video plane, absent until the companion yields a complete
+    /// frame. It is intentionally outside the pak atlas cache: frames replace
+    /// one texture in place rather than minting atlas identities at 12 fps.
+    remote_video: Option<RemoteTexture>,
 }
 
 impl Renderer {
@@ -249,7 +270,68 @@ impl Renderer {
             raw_clut: Vec::new(),
             tint: 0xffff_ffff,
             palette: -1,
+            remote_video: None,
         }
+    }
+
+    /// Replace the remote plane's palette + indices while the GE is idle.
+    /// Dimensions are the `.pkst` contract: power-of-two, at most 512 each.
+    /// The renderer owns aligned persistent storage so the reader's staging
+    /// buffer may immediately chase the next ring slot.
+    pub unsafe fn update_remote_video(
+        &mut self,
+        w: u32,
+        h: u32,
+        palette: &[u8],
+        pixels: &[u8],
+    ) -> bool {
+        let valid_dim = |v: u32| v > 0 && v <= 512 && v.is_power_of_two();
+        let Some(pixel_bytes) = (w as usize).checked_mul(h as usize) else {
+            return false;
+        };
+        if !valid_dim(w) || !valid_dim(h) || palette.len() != 1024 || pixels.len() != pixel_bytes {
+            return false;
+        }
+
+        let geometry_changed = self
+            .remote_video
+            .as_ref()
+            .is_none_or(|texture| texture.w != w as i32 || texture.h != h as i32);
+        if geometry_changed {
+            self.remote_video = Some(RemoteTexture {
+                w: w as i32,
+                h: h as i32,
+                palette: Box::new(RemotePalette([0; 256])),
+                pixels: alloc::vec![0u128; pixel_bytes.div_ceil(16)],
+                pixel_bytes,
+            });
+        }
+        let texture = self.remote_video.as_mut().expect("allocated above");
+        core::ptr::copy_nonoverlapping(
+            palette.as_ptr(),
+            texture.palette.0.as_mut_ptr().cast::<u8>(),
+            palette.len(),
+        );
+        core::ptr::copy_nonoverlapping(
+            pixels.as_ptr(),
+            texture.pixels.as_mut_ptr().cast::<u8>(),
+            pixels.len(),
+        );
+        sys::sceKernelDcacheWritebackRange(
+            texture.palette.0.as_ptr() as *const c_void,
+            palette.len() as u32,
+        );
+        sys::sceKernelDcacheWritebackRange(
+            texture.pixels.as_ptr() as *const c_void,
+            texture.pixel_bytes as u32,
+        );
+        true
+    }
+
+    /// Release the persistent plane. The PSP frame loop calls this only
+    /// after `sceGuSync`; dropping it during a guest turn would race the GE.
+    pub fn clear_remote_video(&mut self) {
+        self.remote_video = None;
     }
 
     /// Rewind the per-frame pool. ONLY after the frame loop's `sceGuSync`.
@@ -341,6 +423,10 @@ impl Renderer {
                     // on real hardware (each upload carries a dcache
                     // writeback and a GE command flush).
                 }
+                Item::VideoQuad { .. } => {
+                    // One persistent dynamic texture, drawn between the GB
+                    // batch and the overlay chrome below.
+                }
                 Item::OverlayRect { .. } => {
                     // Batched after ui_batch so the retained overlay always
                     // composites over the complete GB layer.
@@ -349,6 +435,7 @@ impl Renderer {
         }
 
         self.ui_batch(list, pak);
+        self.remote_video_quad(list);
         self.overlay_batch(list);
 
         // Hand back a 2D-clean state (the pocket3d-gu end_3d discipline).
@@ -802,6 +889,75 @@ impl Renderer {
             GuPrimitive::Sprites,
             UI_VTYPE,
             (n * 2) as i32,
+            core::ptr::null(),
+            dst as *const c_void,
+        );
+    }
+
+    /// Draw the native host's latest desktop frame. The DrawList owns only
+    /// its destination geometry; the CLUT8 bytes are updated out-of-band in
+    /// [`Renderer::update_remote_video`] during the GE-idle window.
+    unsafe fn remote_video_quad(&mut self, list: &DrawList) {
+        let Some((x, y, w, h)) = list.items.iter().find_map(|item| match item {
+            Item::VideoQuad { x, y, w, h } => Some((*x, *y, *w, *h)),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(texture) = self.remote_video.as_ref() else {
+            return;
+        };
+
+        sys::sceGuDisable(GuState::DepthTest);
+        sys::sceGuEnable(GuState::Texture2D);
+        sys::sceGuDisable(GuState::AlphaTest);
+        sys::sceGuDisable(GuState::Blend);
+        sys::sceGuClutMode(ClutPixelFormat::Psm8888, 0, 0xff, 0);
+        sys::sceGuClutLoad(32, texture.palette.0.as_ptr() as *const c_void);
+        sys::sceGuTexMode(TexturePixelFormat::PsmT8, 0, 0, 0);
+        sys::sceGuTexImage(
+            MipmapLevel::None,
+            texture.w,
+            texture.h,
+            texture.w,
+            texture.pixels.as_ptr() as *const c_void,
+        );
+        // Same real-GE rule as pak textures: rebinding a same-sized dynamic
+        // plane does not invalidate the hardware cache on its own.
+        sys::sceGuTexFlush();
+        sys::sceGuTexFunc(TextureEffect::Replace, TextureColorComponent::Rgba);
+        sys::sceGuTexFilter(TextureFilter::Linear, TextureFilter::Linear);
+        sys::sceGuTexWrap(GuTexWrapMode::Clamp, GuTexWrapMode::Clamp);
+        sys::sceGuTexScale(1.0, 1.0);
+        sys::sceGuTexOffset(0.0, 0.0);
+
+        let dst = self.pool.alloc(2 * core::mem::size_of::<Vert2dTc>()) as *mut Vert2dTc;
+        dst.write(Vert2dTc {
+            u: 0,
+            v: 0,
+            abgr: 0xffff_ffff,
+            x: x as i16,
+            y: y as i16,
+            z: 0,
+            pad: 0,
+        });
+        dst.add(1).write(Vert2dTc {
+            u: texture.w as i16,
+            v: texture.h as i16,
+            abgr: 0xffff_ffff,
+            x: x.saturating_add(w) as i16,
+            y: y.saturating_add(h) as i16,
+            z: 0,
+            pad: 0,
+        });
+        sys::sceKernelDcacheWritebackRange(
+            dst as *const c_void,
+            (2 * core::mem::size_of::<Vert2dTc>()) as u32,
+        );
+        sys::sceGuDrawArray(
+            GuPrimitive::Sprites,
+            UI_VTYPE,
+            2,
             core::ptr::null(),
             dst as *const c_void,
         );
