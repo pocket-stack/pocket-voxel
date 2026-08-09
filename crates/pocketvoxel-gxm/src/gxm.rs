@@ -179,6 +179,35 @@ impl GpuSlab {
     }
 }
 
+/// What the kernel will still hand out, by partition. `size` is an in-out
+/// field: set it to the struct's own size before the call.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FreeMemorySize {
+    pub size: i32,
+    pub size_user: i32,
+    pub size_cdram: i32,
+    pub size_phycont: i32,
+}
+
+extern "C" {
+    fn sceKernelGetFreeMemorySize(info: *mut FreeMemorySize) -> i32;
+}
+
+/// This application's free memory, by partition. Logged at boot: the pak's
+/// pools, the atlas cache and the QuickJS heap all come out of it, and when
+/// something does not fit, this is the number that says so.
+pub fn free_memory() -> FreeMemorySize {
+    let mut info = FreeMemorySize {
+        size: core::mem::size_of::<FreeMemorySize>() as i32,
+        ..FreeMemorySize::default()
+    };
+    unsafe {
+        sceKernelGetFreeMemorySize(&mut info);
+    }
+    info
+}
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@
 #
 # The composition, in docs/RUNTIMES.md terms:
 #   pocketvoxel-core the presentation core (scene, cameras, draw list)
-# + pocketvoxel-gl   the vitaGL backend for that draw list
+# + pocketvoxel-gxm  the raw-GXM backend for that draw list
 # + this crate       the `voxel` surface registration, pak file loading, the
 #                    PCM ring, and the frame loop
 #
@@ -45,7 +45,12 @@ vitasdk-sys = { version = "0.3.3", features = [
 ] }
 libquickjs-sys = { git = "https://github.com/pocket-stack/quickjs-rs.git", rev = "ba5bdd0dc013518768e76cd9e05cd30ed53dd35b" }
 pocketvoxel-core = { path = "../pocketvoxel-core" }
-pocketvoxel-gl = { path = "../pocketvoxel-gl" }
+pocketvoxel-gxm = { path = "../pocketvoxel-gxm" }
+# vita2d owns process-level GXM: the context, the shader patcher, the render
+# target, the shared depth buffer, the per-frame GPU pool and the swap. The
+# backend composes inside its scene.
+vita2d-sys = "0.1.1"
+
 
 [[bin]]
 name = "pocketvoxel-vita"

@@ -48,10 +48,12 @@ name = "pocketvoxel-core"
 version = "0.1.0"
 
 [[package]]
-name = "pocketvoxel-gl"
+name = "pocketvoxel-gxm"
 version = "0.1.0"
 dependencies = [
  "pocketvoxel-core",
+ "vita2d-sys",
+ "vitasdk-sys",
 ]
 
 [[package]]
@@ -60,7 +62,8 @@ version = "0.1.0"
 dependencies = [
  "libquickjs-sys",
  "pocketvoxel-core",
- "pocketvoxel-gl",
+ "pocketvoxel-gxm",
+ "vita2d-sys",
  "vitasdk-sys",
 ]
 
@@ -78,6 +81,12 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "vita2d-sys"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7cda04ff147d95f185876d6855977fc09e727c3f098bdf5fb3fae26efa640bf"
 
 [[package]]
 name = "vitasdk-sys"

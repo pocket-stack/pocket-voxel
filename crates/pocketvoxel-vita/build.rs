@@ -15,30 +15,26 @@
 use std::path::Path;
 use std::{env, fs};
 
-/// The vitaGL link, in the order VitaSDK's own samples use — GNU ld reads
-/// each archive once, so this order is load-bearing.
+/// The graphics link. GNU ld reads each archive once, so the order matters.
 ///
-/// `SceShaccCg_stub_weak` rather than `SceShaccCg_stub` is the one deliberate
-/// difference, and it is worth stating why the compiler is in the link at
-/// all: vitaGL builds even its FIXED-FUNCTION shaders at runtime. `ffp.c`'s
-/// `reload_ffp_shaders` sprintf's a Cg source for the exact state mask a
-/// draw needs and hands it to `shark_compile_shader_extended`, so the
-/// runtime compiler (`libshacccg.suprx`) is a hard prerequisite of this
-/// backend, not an optional extra for GLSL programs. The weak stub means a
-/// console without that module still LAUNCHES the VPK, so main.rs can check
-/// for it and say so, instead of the system refusing the app with a code.
-const VITAGL_LIBS: &[&str] = &[
-    "vitaGL",
-    "stdc++",
+/// This is the whole benefit of the GXM backend stated as a list: no
+/// `vitashark`, no `SceShaccCgExt`, no `SceShaccCg` stub, no `taihen_stub`,
+/// no `stdc++`. Those were vitaGL's, and they were there because vitaGL
+/// builds even its fixed-function shaders on the console — which made
+/// `libshacccg.suprx` a prerequisite for launching at all. This backend
+/// brings shaders that are already compiled, so nothing here reaches for a
+/// compiler and the VPK installs as one self-contained file.
+///
+/// vita2d's image loaders and font backends reference libpng, libjpeg and
+/// SceP(v)f, but they live in their own archive members and this crate calls
+/// none of them, so the linker never pulls those objects in.
+const GRAPHICS_LIBS: &[&str] = &[
+    "vita2d",
     "SceCommonDialog_stub",
     "SceGxm_stub",
     "SceDisplay_stub",
     "SceAppMgr_stub",
-    "mathneon",
-    "vitashark",
-    "SceShaccCgExt",
-    "taihen_stub",
-    "SceShaccCg_stub_weak",
+    "SceSysmodule_stub",
     "SceKernelDmacMgr_stub",
 ];
 
@@ -65,7 +61,7 @@ fn main() {
         panic!("VITASDK is not set — run through `bun tools/voxel.ts vita`")
     });
     println!("cargo:rustc-link-search=native={vitasdk}/arm-vita-eabi/lib");
-    for lib in VITAGL_LIBS {
+    for lib in GRAPHICS_LIBS {
         println!("cargo:rustc-link-lib=static={lib}");
     }
     println!("cargo:rerun-if-env-changed=VITASDK");

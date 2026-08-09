@@ -38,7 +38,8 @@ use libquickjs_sys::*;
 use pocketvoxel_core::pak;
 use pocketvoxel_core::scene::Scene;
 use pocketvoxel_core::spec::{self, op};
-use pocketvoxel_gl as vgl;
+use pocketvoxel_gxm as pvx;
+use vita2d_sys as v2d;
 use vitasdk_sys::{
     SCE_CTRL_CIRCLE, SCE_CTRL_CROSS, SCE_CTRL_DOWN, SCE_CTRL_LEFT, SCE_CTRL_MODE_ANALOG,
     SCE_CTRL_RIGHT, SCE_CTRL_SELECT, SCE_CTRL_START, SCE_CTRL_UP, SceCtrlData,
@@ -149,39 +150,49 @@ fn trail(line: &str) {
 /// a memory card needs a USB session and a working machine to inspect. So
 /// each stage owns a colour, and the screen IS the diagnosis.
 ///
-/// `glClear` runs vitaGL's precompiled clear shader, so every one of these
-/// paints even on a console with no runtime shader compiler at all — which
-/// is precisely the case that used to be indistinguishable from a black
-/// screen.
+/// Colours are ABGR (`0xAABBGGRR`), the packing vita2d's clear takes and the
+/// pak's own palettes use.
 mod stage_color {
-    /// Past GL init, loading the game.
-    pub const BOOTING: (f32, f32, f32) = (0.04, 0.07, 0.22);
-    /// libshacccg.suprx is missing.
-    pub const NO_SHADER_COMPILER: (f32, f32, f32) = (0.45, 0.03, 0.03);
+    /// Past graphics init, loading the game.
+    pub const BOOTING: u32 = 0xff38_1201;
     /// The pak file was not found.
-    pub const NO_PAK: (f32, f32, f32) = (0.50, 0.26, 0.0);
+    pub const NO_PAK: u32 = 0xff00_4380;
     /// The pak was found but did not validate.
-    pub const BAD_PAK: (f32, f32, f32) = (0.38, 0.0, 0.38);
-    /// vitaGL could not hold the pak's pools.
-    pub const NO_VRAM: (f32, f32, f32) = (0.55, 0.55, 0.55);
+    pub const BAD_PAK: u32 = 0xff61_0061;
+    /// The pak's pools would not fit in GXM-mapped memory.
+    pub const NO_VRAM: u32 = 0xff8c_8c8c;
     /// The QuickJS guest failed to boot.
-    pub const GUEST_FAILED: (f32, f32, f32) = (0.0, 0.33, 0.40);
+    pub const GUEST_FAILED: u32 = 0xff66_5400;
+}
+
+/// Paint one solid frame and present it. Used for the boot stages and for
+/// [`fail`], so a console with no log and no USB session still says what
+/// happened.
+///
+/// # Safety
+/// Render thread, after `vita2d_init*`, with no scene open.
+unsafe fn paint(color: u32) {
+    v2d::vita2d_set_clear_color(color);
+    v2d::vita2d_start_drawing();
+    v2d::vita2d_clear_screen();
+    v2d::vita2d_end_drawing();
+    v2d::vita2d_swap_buffers();
 }
 
 /// Park with the reason on screen, in the boot trail, and in its own file.
 /// Parking rather than exiting: a VPK that returns from `main` drops the
 /// player back to LiveArea with nothing to show for it.
 ///
-/// Callable before GL exists — `painted` says whether a clear can reach the
-/// display yet, and before that the colour is simply skipped.
-fn fail(message: &str, color: (f32, f32, f32), painted: bool) -> ! {
+/// Callable before graphics exist — `painted` says whether a clear can reach
+/// the display yet, and before that the colour is simply skipped.
+fn fail(message: &str, color: u32, painted: bool) -> ! {
     trail(&format!("FATAL: {message}"));
     let _ = std::fs::create_dir_all(DATA_DIR);
     let _ = std::fs::write(format!("{DATA_DIR}/error.txt"), message);
     loop {
         unsafe {
             if painted {
-                vgl::Renderer::paint(color.0, color.1, color.2);
+                paint(color);
             }
             sceKernelDelayThread(100_000);
         }
@@ -247,130 +258,36 @@ unsafe fn run() {
     trail(&format!("boot: tier {TIER}, {} KB guest", APP_JS.len() / 1024));
 
     // ---- graphics FIRST ----
-    // Before the pak, before QuickJS, before anything that can fail: once GL
-    // is up, `Renderer::paint` can put a colour on the panel, and every later
+    // Before the pak, before QuickJS, before anything that can fail: once
+    // vita2d is up, `paint` can put a colour on the panel, and every later
     // failure stops being a black screen.
     //
-    // The budget is MEASURED, not assumed. vitaGL's `vglInitExtended` takes a
-    // "leave this much for newlib" threshold and clamps the result at zero,
-    // so a wrong guess about this console's budget silently hands it no RAM
-    // pool — and because vitaGL starts its splashscreen partway through init,
-    // that failure shows up as a logo spinning forever. Both numbers go in
-    // the boot trail BEFORE the call, so a hang inside it still leaves the
-    // budget on the memory card.
-    let free = vgl::gl::free_memory();
+    // The budget is still MEASURED and logged BEFORE anything can fail, so a
+    // boot that dies inside init still leaves this console's numbers on the
+    // memory card. Unlike the vitaGL backend there is no pool to divide:
+    // vita2d owns the render target and the depth buffer, and the pak's pools
+    // and every atlas texture come from their own GXM-mapped blocks.
+    let free = pvx::gxm::free_memory();
     trail(&format!(
         "mem: user {} MB, cdram {} MB, phycont {} MB",
         free.size_user / 1048576,
         free.size_cdram / 1048576,
         free.size_phycont / 1048576,
     ));
-    // What newlib keeps: the 32 MB pak, the QuickJS heap and the atlas
-    // expansion scratch, with room to spare.
-    const NEWLIB_RESERVE: i32 = 96 * 1024 * 1024;
-    // What vitaGL needs: the pak's pools (~24 MB), the atlas cache (24 MB),
-    // the circular pool every client-array draw stages through, and slack.
-    const GL_POOL_WANT: i32 = 96 * 1024 * 1024;
-    const GL_POOL_MIN: i32 = 48 * 1024 * 1024;
-    let ram_pool = (free.size_user - NEWLIB_RESERVE).min(GL_POOL_WANT);
-    if ram_pool < GL_POOL_MIN {
-        fail(
-            &format!(
-                "not enough memory: {} MB free, which leaves {} MB for the \
-                 renderer after the game's own {} MB",
-                free.size_user / 1048576,
-                ram_pool / 1048576,
-                NEWLIB_RESERVE / 1048576,
-            ),
-            stage_color::NO_VRAM,
-            false,
-        );
-    }
-    trail(&format!("gl: asking for a {} MB RAM pool", ram_pool / 1048576));
-    // The scratch pool every client-array draw stages through. A pulled grass
-    // mesh is the largest single stage (tens of thousands of 16-byte
-    // vertices) and vitaGL guarantees three frames of lifetime, so 8 MB is
-    // several times the worst frame — and far below the 32 MB default this
-    // machine has better uses for.
-    vgl::gl::vglSetCircularPoolSize(8 * 1024 * 1024);
-    // The return value is NOT a success flag: vitaGL's init ends with
-    // `return res_fallback`, so TRUE means "your resolution did not fit and I
-    // substituted the maximum" and the ordinary successful path returns
-    // FALSE. Reading it as success is what turned a healthy init into a
-    // FATAL, and — because the failure path could not paint — into a
-    // splashscreen spinning forever.
-    let resolution_fell_back = vgl::gl::vglInitWithCustomSizes(
-        // The legacy (immediate-mode) pool: this backend never uses
-        // glBegin/glEnd, so it only has to be non-zero.
-        64 * 1024,
-        vgl::PHYSICAL_W,
-        vgl::PHYSICAL_H,
-        ram_pool,
-        free.size_cdram,
-        0,
-        0,
-        vgl::gl::SCE_GXM_MULTISAMPLE_NONE,
-    ) != 0;
-    if resolution_fell_back {
-        trail("gl: WARNING — vitaGL substituted the display's maximum resolution");
-    }
-    // Whether init actually produced something usable is a question about
-    // memory, so ask memory.
-    let pool = vgl::gl::vglMemFree(vgl::gl::VGL_MEM_RAM);
-    if pool == 0 {
-        fail(
-            "vitaGL initialized with an empty RAM pool",
-            stage_color::NO_VRAM,
-            false,
-        );
-    }
-    vgl::gl::vglWaitVblankStart(1);
-    vgl::Renderer::paint(
-        stage_color::BOOTING.0,
-        stage_color::BOOTING.1,
-        stage_color::BOOTING.2,
-    );
-    trail(&format!(
-        "gl: {}x{}, {} KB in the RAM pool",
-        vgl::PHYSICAL_W,
-        vgl::PHYSICAL_H,
-        vgl::gl::vglMemFree(vgl::gl::VGL_MEM_RAM) / 1024,
-    ));
 
-    // vitaGL's OWN answer, not a guess at where the module lives: it probes
-    // vitaShaRK's default and `ur0:data/external/`, and a filesystem check
-    // that misses either would halt a console that works.
-    //
-    // Both of vitaGL's probes are on internal storage. A memory card is the
-    // one place a developer can drop a file during a VitaShell USB session,
-    // so a `ux0:` copy gets a second attempt before the player is told to go
-    // and install one.
-    if !vgl::Renderer::shader_compiler_online() {
-        for path in [
-            c"ux0:data/libshacccg.suprx",
-            c"ux0:data/voxelmon/libshacccg.suprx",
-        ] {
-            if vgl::Renderer::adopt_shader_compiler(path) {
-                trail(&format!("gl: shader compiler loaded from {path:?}"));
-                break;
-            }
-        }
+    // vita2d's per-frame GPU pool, which every CPU-built pass stages through
+    // (sky bands, decals, the ghost, cards, the GB UI layer, and a pulled
+    // grass mesh — the largest single stage at tens of thousands of 16-byte
+    // vertices). Reset by `vita2d_start_drawing`, so this only has to hold
+    // one frame; 4 MB is several times the worst one.
+    if v2d::vita2d_init_advanced(4 * 1024 * 1024) < 0 {
+        // Nothing can paint if graphics never came up; the card is the only
+        // channel left.
+        fail("vita2d_init failed", stage_color::BOOTING, false);
     }
-    if !vgl::Renderer::shader_compiler_online() {
-        fail(
-            "libshacccg.suprx is not installed.\n\n\
-             Pocket Voxel renders through vitaGL, which builds its shaders on \
-             the console at runtime, so the PS Vita's own shader compiler \
-             module has to be present. Install it once with VitaDeploy or \
-             ShaccCgSetup (it extracts the module from a firmware update \
-             file); every vitaGL homebrew on the system needs the same \
-             module. A copy at ux0:data/libshacccg.suprx also works, which \
-             is the one place a VitaShell USB session can reach.\n",
-            stage_color::NO_SHADER_COMPILER,
-            true,
-        );
-    }
-    trail("gl: shader compiler online");
+    v2d::vita2d_set_vblank_wait(1);
+    paint(stage_color::BOOTING);
+    trail(&format!("gfx: vita2d up, {}x{}", pvx::PHYSICAL_W, pvx::PHYSICAL_H));
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
 
     // ---- the pak ----
@@ -394,14 +311,15 @@ unsafe fn run() {
         pak.game.len() / 1024,
     ));
 
-    let mut renderer = match vgl::Renderer::new(&pak) {
+    trail(&format!(
+        "gfx: uploading {} KB of cooked geometry to GXM memory",
+        pvx::Renderer::pool_bytes_needed(&pak) / 1024,
+    ));
+    let mut renderer = match pvx::Renderer::new(&pak) {
         Ok(r) => r,
         Err(e) => fail(e, stage_color::NO_VRAM, true),
     };
-    trail(&format!(
-        "gl: pools uploaded, {} KB left in the RAM pool",
-        vgl::gl::vglMemFree(vgl::gl::VGL_MEM_RAM) / 1024,
-    ));
+    trail("gfx: pipeline and pak pools ready");
 
     // ---- scene ----
     // The GAME/AUDI sections borrow from the leaked blob, so the 'static
@@ -496,7 +414,15 @@ unsafe fn run() {
         let list = pocketvoxel_core::draw::build(scene, &pak);
         #[cfg(feature = "telemetry")]
         let t_work = sceKernelGetProcessTimeLow();
+        // The clear colour is the sky's below-horizon band, and it has to be
+        // set before the scene opens: unlike the GE backend, whose sky pass
+        // owns its own clear, this one records into a scene that is already
+        // cleared.
+        v2d::vita2d_set_clear_color(pvx::backdrop(&list));
+        v2d::vita2d_start_drawing();
+        v2d::vita2d_clear_screen();
         renderer.render(&list, &pak);
+        v2d::vita2d_end_drawing();
         // The first frames go in the boot trail with what they actually drew.
         // "The guest is running and the screen is still empty" and "the guest
         // never got here" look identical on the panel, and only this tells
@@ -509,10 +435,10 @@ unsafe fn run() {
                 renderer.atlas_bytes() / 1024,
             ));
         }
-        // vglSwapBuffers ends the GXM scene, queues the flip and — with
-        // vsync on — paces the loop. The audio pump then runs while the GPU
-        // is still consuming this frame.
-        vgl::gl::vglSwapBuffers(0);
+        // The swap queues the flip and — with vblank wait on — paces the
+        // loop. The audio pump then runs while the GPU is still consuming
+        // this frame.
+        v2d::vita2d_swap_buffers();
         audio_pump(scene, &pak);
 
         #[cfg(feature = "telemetry")]
