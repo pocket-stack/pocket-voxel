@@ -168,6 +168,71 @@ static u8 *capture_rgb;
 
 #endif /* PV3DS_CAPTURE */
 
+/* Where the memory report lands. In a capture build it belongs inside the
+ * directory the driver wipes before every run; a playable build writes beside
+ * its error file. */
+#ifdef PV3DS_CAPTURE
+#define REPORT_PATH CAPTURE_DIR "/memory.txt"
+#else
+#define REPORT_PATH "sdmc:/pocketvoxel-3ds-memory.txt"
+#endif
+
+/*
+ * Write down the memory this title was actually given.
+ *
+ * A .3dsx runs inside the Homebrew Launcher's allocation; a CIA is its own
+ * title and the kernel gives it the region hosts/3ds/app.rsf asks for. The two
+ * are not the same number, and the only way to know which one a build got is
+ * to ask at run time: envIsHomebrew() says which of the two containers this
+ * is, osGetApplicationMemType() names the kernel's memory layout (0-5 on an
+ * Old 3DS, 6-8 on a New 3DS), and the region sizes say how much of it this
+ * process may have. The bottom screen shows the same numbers, but only a
+ * playable build has a bottom screen and only a person can read one.
+ *
+ * Two fields do not mean what their names suggest under an emulator, so both
+ * are reported raw rather than reduced:
+ *
+ *   app_used   svcGetSystemInfo's counter for the application region. Azahar
+ *              answers 124 MiB for a 96 MiB region, so osGetMemRegionFree()
+ *              (size - used) underflows into a 4 GB "free". The subtraction is
+ *              left to whoever reads the file.
+ *   linear_free  reads 0 before the first linearAlloc, because libctru maps
+ *              the linear pool on demand; it is only meaningful after the
+ *              arena has been claimed.
+ *
+ * heap_used is newlib's own accounting (mallinfo().uordblks), which is what
+ * says how large the malloc heap has to BE — the pak is 30.6 MiB of it and
+ * QuickJS's parse of the pak's GAME section is most of the rest.
+ */
+static void report_memory(const char *stage, uint32_t arena_bytes) {
+  static bool started = false;
+  struct mallinfo heap = mallinfo();
+#ifdef PV3DS_CAPTURE
+  mkdir(CAPTURE_DIR, 0777);
+#endif
+  FILE *file = fopen(REPORT_PATH, started ? "ab" : "wb");
+  if (file == NULL) return;
+  started = true;
+  fprintf(
+    file,
+    "%s homebrew=%d memtype=%lu heap=%lu heap_used=%lu linear=%lu linear_free=%lu "
+    "app_size=%lu app_used=%lu system_size=%lu base_size=%lu arena=%lu\n",
+    stage,
+    envIsHomebrew() ? 1 : 0,
+    (unsigned long)osGetApplicationMemType(),
+    (unsigned long)envGetHeapSize(),
+    (unsigned long)heap.uordblks,
+    (unsigned long)envGetLinearHeapSize(),
+    (unsigned long)linearSpaceFree(),
+    (unsigned long)osGetMemRegionSize(MEMREGION_APPLICATION),
+    (unsigned long)osGetMemRegionUsed(MEMREGION_APPLICATION),
+    (unsigned long)osGetMemRegionSize(MEMREGION_SYSTEM),
+    (unsigned long)osGetMemRegionSize(MEMREGION_BASE),
+    (unsigned long)arena_bytes
+  );
+  fclose(file);
+}
+
 /* Report a boot or runtime failure as itself rather than as a timeout, then
  * park: Azahar does not stop when the app returns from main. */
 static void fail(const char *message) {
@@ -448,6 +513,9 @@ static void capture_done(void) {
 // ---------------------------------------------------------------------------
 
 int main(void) {
+  /* Before anything is claimed: the grant itself, which is what differs
+   * between a .3dsx under hbmenu and this binary installed as a CIA. */
+  report_memory("entry", 0);
   gfxInitDefault();
   /* No-op on an Old 3DS; on a New 3DS it unlocks the faster clock and the
    * extra cache, which the QuickJS guest feels directly. */
@@ -517,6 +585,10 @@ int main(void) {
   size_t guest_length = 0;
   uint8_t *guest = read_romfs_file(GUEST_PATH, &guest_length, 1, true);
   if (guest == NULL) fail(GUEST_PATH " is missing or unreadable");
+
+  /* Everything large is now claimed — the arena, the 30.6 MiB pak, the guest
+   * source — so this line is what the run has left to work in. */
+  report_memory("loaded", arena_bytes);
 
 #ifndef PV3DS_CAPTURE
   printf(
@@ -608,6 +680,10 @@ int main(void) {
      * tick rather than the index keeps this true even if a tape ever names one
      * tick twice. */
     if (tick >= last_mark) {
+      /* The run's standing cost, after every texture the tape reached has been
+       * expanded and the guest's state is built: the number a console has to
+       * have, rather than the number libctru happened to hand out. */
+      report_memory("end", arena_bytes);
       capture_done();
       /* Park: Azahar does not stop when the app returns from main, and a
        * still process is what the driver kills. */

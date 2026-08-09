@@ -2,6 +2,7 @@
 //
 //   bun tools/voxel-3ds.ts                  the playable .3dsx
 //   bun tools/voxel-3ds.ts --capture        the deterministic e2e binary
+//   bun tools/voxel-3ds.ts --cia            also emit an installable CIA
 //   bun tools/voxel-3ds.ts --arena-mib 8 --texture-mib 16
 //
 // The toolchain spans two environments, exactly as the PocketJS 3DS host's
@@ -15,7 +16,9 @@
 //   2. cargo build          -> crates/pocketvoxel-3ds/target/…/
 //                              libpocketvoxel_3ds.a            (macOS)
 //   3. QuickJS              -> dist/3ds/quickjs/libquickjs.a   (container, cached)
+//  3b. makerom (--cia)      -> dist/3ds/makerom/bin/makerom    (container, cached)
 //   4. hosts/3ds/Makefile   -> dist/3ds/voxelmon.3dsx          (container)
+//                              dist/3ds/voxelmon.cia           under --cia
 //
 // dist/ is git-ignored, which is where every ROM-derived byte stays: the pak,
 // the guest bundle and the .3dsx all live there and none of them ever
@@ -42,6 +45,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { availableParallelism, homedir } from "node:os";
@@ -58,6 +62,12 @@ const RUST_TARGET = "armv6k-nintendo-3ds";
 const APP_STATIC_LIBRARY = "libpocketvoxel_3ds.a";
 const CONTAINER_IMAGE = "devkitpro/devkitarm:latest";
 const CONTAINER_REPOSITORY = "/repo";
+
+// makerom is what turns the ELF into an installable title, and it ships in
+// neither devkitPro nor Homebrew, so --cia clones and builds it. Every
+// dependency it has (mbedtls, blz, yaml) is vendored in the repository, so the
+// build itself needs no network — only the clone does.
+const MAKEROM_REPOSITORY = "https://github.com/3DSGuy/Project_CTR";
 
 /** The guest entry. It needs only `globalThis.voxel`, so the PSP's entry file
  * is this console's too — one bundle, both hosts. */
@@ -134,6 +144,8 @@ const QUICKJS_COMPILE_FLAGS = [
 
 export interface VoxelThreeDsArguments {
   readonly capture: boolean;
+  /** Also package the ELF as an installable CIA title. */
+  readonly cia: boolean;
   readonly skipBundle: boolean;
   readonly tracePath: string;
   readonly packageDir: string;
@@ -148,7 +160,7 @@ export interface VoxelThreeDsArguments {
 }
 
 const USAGE =
-  "usage: bun tools/voxel-3ds.ts [--capture] [--trace <path>] [--skip-bundle] " +
+  "usage: bun tools/voxel-3ds.ts [--capture] [--cia] [--trace <path>] [--skip-bundle] " +
   "[--package-outdir <dir>] [--arena-mib N] [--banks N] [--texture-mib N] " +
   "[--heap-mib N] [--linear-mib N] [cargo args…]";
 
@@ -190,7 +202,7 @@ export function parseVoxelThreeDsArguments(
   const cargoArgs: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    if (a === "--capture" || a === "--skip-bundle") continue;
+    if (a === "--capture" || a === "--cia" || a === "--skip-bundle") continue;
     if (a.startsWith("--") && valued.has(a.slice(2))) {
       i += 1;
       continue;
@@ -199,6 +211,7 @@ export function parseVoxelThreeDsArguments(
   }
   return {
     capture: argv.includes("--capture"),
+    cia: argv.includes("--cia"),
     skipBundle: argv.includes("--skip-bundle"),
     tracePath: resolvePath(repository, stringFlag(argv, "trace", DEFAULT_TRACE)),
     packageDir: resolvePath(
@@ -451,6 +464,148 @@ export async function ensureQuickJs(
 }
 
 // ---------------------------------------------------------------------------
+// makerom (--cia)
+// ---------------------------------------------------------------------------
+
+/**
+ * Clone and build makerom, and cache the binary. The stamp covers the checked
+ * out revision and the container image, so a re-clone or a new devkitARM
+ * release rebuilds and nothing else does.
+ *
+ * The clone happens on macOS because the container runs with --network=none;
+ * the build happens in the container because that is where this repository's
+ * device toolchain lives.
+ */
+export async function ensureMakerom(
+  cacheDirectory: string,
+  imageId: string,
+  mounts: readonly Mount[],
+): Promise<string> {
+  const checkout = join(cacheDirectory, "src");
+  const project = join(checkout, "makerom");
+  const binary = join(project, "bin", "makerom");
+  const stampPath = join(cacheDirectory, ".stamp");
+
+  if (!existsSync(join(project, "makefile"))) {
+    if (!Bun.which("git")) {
+      throw new Error("voxel 3ds: --cia needs git on PATH to fetch makerom.");
+    }
+    mkdirSync(cacheDirectory, { recursive: true });
+    rmSync(checkout, { recursive: true, force: true });
+    console.log(`voxel 3ds: cloning ${MAKEROM_REPOSITORY} …`);
+    const clone = await capture("git", ["clone", "--depth", "1", MAKEROM_REPOSITORY, checkout]);
+    if (clone.exitCode !== 0) {
+      rmSync(checkout, { recursive: true, force: true });
+      throw new Error(
+        `voxel 3ds: could not clone ${MAKEROM_REPOSITORY} into ${checkout}.\n` +
+          (clone.stderr.trim() || clone.stdout.trim()) +
+          "\nmakerom is the only tool that builds a CIA and ships in neither " +
+          "devkitPro nor Homebrew. With no network, clone it by hand into that " +
+          "path and rerun; the build itself is offline.",
+      );
+    }
+  }
+
+  const head = await capture("git", ["rev-parse", "HEAD"], checkout);
+  const stamp = `${imageId} ${head.exitCode === 0 ? head.stdout.trim() : "unknown"}`;
+  if (
+    existsSync(binary) &&
+    existsSync(stampPath) &&
+    readFileSync(stampPath, "utf8").trim() === stamp
+  ) {
+    console.log(`voxel 3ds: makerom cached (${binary})`);
+    return binary;
+  }
+
+  console.log("voxel 3ds: building makerom …");
+  await runContainer(
+    ["make deps", `make -j${availableParallelism()}`].join("\n"),
+    mounts,
+    containerPathFor(project, mounts),
+    {},
+    "makerom build",
+  );
+  if (!existsSync(binary)) {
+    throw new Error(`voxel 3ds: the makerom build did not produce ${binary}`);
+  }
+  writeFileSync(stampPath, `${stamp}\n`);
+  return binary;
+}
+
+// ---------------------------------------------------------------------------
+// CIA identity
+// ---------------------------------------------------------------------------
+
+/** FNV-1a over the UTF-8 bytes; the hash this repository already stamps with. */
+function fnv1a32(text: string): number {
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(text)) {
+    hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+  }
+  return hash;
+}
+
+/**
+ * The string every piece of the CIA's identity is derived from. The playable
+ * title and the capture binary get DIFFERENT ones on purpose: they are
+ * separate installed titles, so measuring one does not overwrite the other and
+ * a capture run cannot be started from the icon a player installed.
+ */
+export function ciaAppId(capture: boolean): string {
+  return capture ? "dev.pocketjs.voxelmon.capture" : "dev.pocketjs.voxelmon";
+}
+
+/**
+ * The unique part of the title id, `0x0004000000<unique>00`.
+ *
+ * **Unique ids 0xFF000-0xFFFFF are the homebrew block**: no retail game and no
+ * system title is assigned one, so an installed CIA cannot collide with a title
+ * the console already has. The low 12 bits come from the id above, so a title
+ * keeps its id across rebuilds — an install replaces the previous one instead
+ * of accumulating — without anyone choosing a number by hand.
+ */
+export function ciaUniqueId(appId: string): string {
+  return `0x${(0xff000 | (fnv1a32(appId) & 0xfff)).toString(16).toUpperCase()}`;
+}
+
+/**
+ * The full 64-bit title id as hex: category 0x00040000 (a CTR application),
+ * then the unique id shifted up by the 8-bit variation, which is 0. It names
+ * the directory the installed title lands in, on an SD card and in Azahar
+ * alike: `Nintendo 3DS/<id>/<id>/title/00040000/<low 32 bits>/content/`.
+ */
+export function ciaTitleId(appId: string): string {
+  const unique = 0xff000 | (fnv1a32(appId) & 0xfff);
+  return `00040000${((unique << 8) >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+/**
+ * The product code, `CTR-P-XXXX`. Nintendo assigns retail codes; homebrew
+ * invents its own, so the four characters are the id's last dotted segment
+ * reduced to A-Z0-9, extended from the id's hash when it is shorter than four.
+ * The shape is the one makerom validates even without `FreeProductCode`.
+ */
+export function ciaProductCode(appId: string): string {
+  const segment = appId.split(".").pop() || appId;
+  const letters = segment.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const filler = fnv1a32(appId).toString(36).toUpperCase();
+  return `CTR-P-${`${letters}${filler}`.slice(0, 4)}`;
+}
+
+/**
+ * The exheader's process name, which is **8 bytes** — makerom truncates a
+ * longer BasicInfo.Title to it silently, so the cut happens here where it is
+ * visible. Characters that would end the RSF's quoted scalar or start another
+ * substitution are dropped first. The title HOME Menu shows is the SMDH's, not
+ * this one, and keeps the whole string.
+ */
+export function ciaProcessName(title: string, appId: string): string {
+  const printable = title.replace(/[^\x20-\x7e]/g, "").replace(/["\\$]/g, "");
+  const cut = printable.slice(0, 8).trim();
+  return cut || `PV${(fnv1a32(appId) & 0xffff).toString(16).toUpperCase().padStart(4, "0")}`;
+}
+
+// ---------------------------------------------------------------------------
 // The capture tape
 // ---------------------------------------------------------------------------
 
@@ -604,10 +759,19 @@ export async function buildVoxel3ds(argv: readonly string[]): Promise<string> {
 
   const mounts: Mount[] = [{ hostPath: repository, containerPath: CONTAINER_REPOSITORY }];
   await ensureQuickJs(quickJsDirectory, imageId, mounts);
+  const makerom = args.cia
+    ? await ensureMakerom(join(distributionRoot, "makerom"), imageId, mounts)
+    : "";
 
   // The capture binary is its own file: a run must never be able to compare a
   // playable build's frames, or a driver's frames against a hand build.
-  const output = join(args.packageDir, args.capture ? "voxelmon-capture.3dsx" : "voxelmon.3dsx");
+  const base = args.capture ? "voxelmon-capture" : "voxelmon";
+  const output = join(args.packageDir, `${base}.3dsx`);
+  const ciaOutput = join(args.packageDir, `${base}.cia`);
+  const appId = ciaAppId(args.capture);
+  // HOME Menu reads the SMDH, so an installed capture title says what it is
+  // rather than sitting next to the playable one under the same name.
+  const smdhTitle = args.capture ? "Pocket Voxel (capture)" : "Pocket Voxel";
   const makeEnvironment: Record<string, string> = {
     PV3DS_APP_LIB: containerPathFor(appLibrary, mounts),
     PV3DS_APP_INCLUDE: containerPathFor(`${appCrateDirectory}include`, mounts),
@@ -617,7 +781,7 @@ export async function buildVoxel3ds(argv: readonly string[]): Promise<string> {
     PV3DS_PAK: containerPathFor(pak, mounts),
     PV3DS_BUILD_DIR: containerPathFor(buildDirectory, mounts),
     PV3DS_OUT_3DSX: containerPathFor(output, mounts),
-    PV3DS_SMDH_TITLE: "Pocket Voxel",
+    PV3DS_SMDH_TITLE: smdhTitle,
     PV3DS_SMDH_AUTHOR: "pocket-voxel",
     PV3DS_SMDH_DESC: "The voxel diorama on the PICA200",
     PV3DS_HOST_ARENA_MIB: String(args.arenaMib),
@@ -631,9 +795,18 @@ export async function buildVoxel3ds(argv: readonly string[]): Promise<string> {
     // and the Makefile's CFLAGS stamp can only notice a value it is given.
     PV3DS_CAPTURE_INPUT: tape.input,
     PV3DS_CAPTURE_MARKS: tape.marks,
+    // The CIA goal is off unless PV3DS_OUT_CIA names a file. The three
+    // identity values are always computed, so the Makefile's stamp sees a
+    // renamed title even on a build that is not asking for a CIA.
+    PV3DS_OUT_CIA: args.cia ? containerPathFor(ciaOutput, mounts) : "",
+    PV3DS_MAKEROM: args.cia ? containerPathFor(makerom, mounts) : "",
+    PV3DS_CIA_TITLE: ciaProcessName(smdhTitle, appId),
+    PV3DS_CIA_PRODUCT: ciaProductCode(appId),
+    PV3DS_CIA_UNIQUE_ID: ciaUniqueId(appId),
   };
 
-  console.log(`voxel 3ds: make (${CONTAINER_IMAGE}${args.capture ? ", capture" : ""})`);
+  const notes = [args.capture ? "capture" : "", args.cia ? "cia" : ""].filter(Boolean);
+  console.log(`voxel 3ds: make (${CONTAINER_IMAGE}${notes.length > 0 ? `, ${notes.join(", ")}` : ""})`);
   await runContainer(
     `make -j${availableParallelism()}`,
     mounts,
@@ -645,6 +818,14 @@ export async function buildVoxel3ds(argv: readonly string[]): Promise<string> {
     throw new Error(`voxel 3ds: the container build did not produce ${output}`);
   }
   console.log(`output: ${output}`);
+  if (args.cia) {
+    if (!existsSync(ciaOutput)) {
+      throw new Error(`voxel 3ds: the container build did not produce ${ciaOutput}`);
+    }
+    console.log(
+      `output: ${ciaOutput} (title id ${ciaTitleId(appId)}, install with \`azahar -i\`)`,
+    );
+  }
   return output;
 }
 

@@ -19,6 +19,11 @@
 #   PV3DS_CAPTURE          "1" builds the deterministic e2e binary
 #   PV3DS_CAPTURE_INPUT    baked input tape, "tick:mask,tick:mask"
 #   PV3DS_CAPTURE_MARKS    baked mark ticks, "tick,tick,…"
+#   PV3DS_OUT_CIA          the .cia to write; empty leaves the goal off
+#   PV3DS_MAKEROM          the makerom binary tools/voxel-3ds.ts built and cached
+#   PV3DS_CIA_TITLE        exheader process name (8 bytes)
+#   PV3DS_CIA_PRODUCT      CTR-P-XXXX product code
+#   PV3DS_CIA_UNIQUE_ID    title id unique part, e.g. 0xFF6B2
 #
 # The memory knobs are PV3DS_HOST_* so they cannot collide with the contract
 # values PV3DS_ARENA_BYTES / PV3DS_ARENA_BANKS that the crate's own header
@@ -33,7 +38,7 @@
 #
 # The tape and the marks travel INSIDE the binary: a capture run never reads
 # the emulator's filesystem for its input. Nothing is written outside
-# PV3DS_BUILD_DIR and PV3DS_OUT_3DSX.
+# PV3DS_BUILD_DIR, PV3DS_OUT_3DSX and PV3DS_OUT_CIA.
 #
 # NO ROM-DERIVED BYTE EVER COMMITS. Both embedded files come from git-ignored
 # dist/, and so does the .3dsx.
@@ -48,6 +53,8 @@ OUT := $(PV3DS_OUT_3DSX)
 # the pak are staged under one.
 ROMFS := $(BUILD)/romfs
 ICON ?= $(CURDIR)/icon.png
+CIA := $(PV3DS_OUT_CIA)
+RSF := $(CURDIR)/app.rsf
 
 CC := $(DEVKITARM)/bin/arm-none-eabi-gcc
 PICASSO := $(DEVKITPRO)/tools/bin/picasso
@@ -97,6 +104,9 @@ SMDH := $(BUILD)/pocketvoxel-3ds.smdh
 
 .PHONY: all clean
 all: $(OUT)
+ifneq ($(CIA),)
+all: $(CIA)
+endif
 
 $(BUILD) $(ROMFS):
 	mkdir -p $@
@@ -151,5 +161,45 @@ $(OUT): $(ELF) $(SMDH) $(ROMFS)/game.js $(ROMFS)/voxelmon.vxpak
 	mkdir -p $(dir $(OUT))
 	$(THREEDSXTOOL) $(ELF) $@ --romfs=$(ROMFS) --smdh=$(SMDH)
 
+ifneq ($(CIA),)
+# The title's identity arrives as -D substitutions, not in a file, and make
+# cannot see a changed environment variable — the same trap FLAGS_STAMP covers
+# for CFLAGS. A stamp carrying the three values makes a re-issued title rebuild
+# the .cia.
+CIA_ARGS := $(PV3DS_CIA_TITLE) $(PV3DS_CIA_PRODUCT) $(PV3DS_CIA_UNIQUE_ID)
+CIA_STAMP := $(BUILD)/cia.stamp
+.PHONY: $(CIA_STAMP).probe
+$(CIA_STAMP).probe: | $(BUILD)
+	@printf '%s\n' "$(CIA_ARGS)" > $(CIA_STAMP).new
+	@cmp -s $(CIA_STAMP).new $(CIA_STAMP) || mv $(CIA_STAMP).new $(CIA_STAMP)
+	@rm -f $(CIA_STAMP).new
+$(CIA_STAMP): $(CIA_STAMP).probe ;
+
+# makerom, not 3dsxtool: a CIA is its own installed title, so it carries the
+# exheader that asks for the 64MB application region and the New 3DS 124MB
+# extension (app.rsf), which a .3dsx cannot do — it inherits whatever the
+# Homebrew Launcher was given. The exheader is also where an installed title's
+# 1 MiB main-thread stack comes from; `__stacksize__` is read by the 3dsx crt0
+# only.
+#
+# The romfs is the SAME staged directory the .3dsx embeds, and makerom builds
+# the image itself from RomFs.RootPath. It rejects a prebuilt raw romfs binary
+# (the container format 3dsxtool takes) with "Invalid RomFS Binary", so there is
+# nothing to share but the directory.
+#
+# -target t is the test target: makerom signs with the fixed test keys rather
+# than Nintendo's retail ones, which is what Azahar installs. No banner is
+# passed — makerom needs one only for a title that plays an animated banner in
+# HOME Menu, and the SMDH already carries the icon and the title strings.
+$(CIA): $(ELF) $(SMDH) $(ROMFS)/game.js $(ROMFS)/voxelmon.vxpak $(RSF) $(CIA_STAMP)
+	mkdir -p $(dir $(CIA))
+	$(PV3DS_MAKEROM) -f cia -o $@ -rsf $(RSF) -target t -exefslogo \
+	  -DAPP_TITLE="$(PV3DS_CIA_TITLE)" \
+	  -DAPP_PRODUCT_CODE="$(PV3DS_CIA_PRODUCT)" \
+	  -DAPP_UNIQUE_ID=$(PV3DS_CIA_UNIQUE_ID) \
+	  -DAPP_ROMFS=$(ROMFS) \
+	  -elf $(ELF) -icon $(SMDH)
+endif
+
 clean:
-	rm -rf $(BUILD) $(OUT)
+	rm -rf $(BUILD) $(OUT) $(CIA)
