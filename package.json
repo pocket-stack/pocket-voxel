@@ -10,12 +10,21 @@
     "shots": "bun tools/voxel.ts shots",
     "psp": "bun tools/voxel.ts psp --release",
     "vita": "bun tools/voxel.ts vita --release",
+    "web:refs": "bun web/scripts/build-reference.ts",
+    "web:build": "bun web/scripts/build.ts",
+    "web:serve": "bun web/scripts/serve.ts",
+    "web:smoke": "bun web/scripts/smoke-wasm.ts",
+    "web:e2e": "bun web/scripts/e2e-chrome.ts",
     "e2e": "bun tests/e2e/voxel-ppsspp.ts",
     "test": "bun test tests/",
     "tsc": "bunx tsc --noEmit -p ."
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
+    "@types/three": "^0.185.0",
     "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
   }
 }

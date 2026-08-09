@@ -100,6 +100,29 @@ bun tools/voxel.ts check    # replay the tapes, assert both rungs' hashes
 
 ## Run it
 
+### Web
+
+The browser build contains the renderer and non-ROM reference metadata, but no
+game content. It verifies and bakes a ROM you select entirely in a local Web
+Worker, transfers the finished pak into the WASM runtime, then releases the
+worker heap.
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.126 --locked
+bun run web:build
+bun run web:serve            # http://127.0.0.1:8131/
+# Optional real-Chrome acceptance with VOXELMON_ROM (or the local default):
+bun run web:e2e
+```
+
+Drop your canonical US Pokémon Red ROM onto the page. The player maps its
+480×272 framebuffer onto a demand-rendered 3D Game Boy; the model's D-pad,
+face buttons, Start, and Select are interactive alongside keyboard and standard
+gamepad input. The ROM and cooked pak remain in memory for this tab only; they
+are neither uploaded nor written to browser storage. The attributed stage model
+and its license ship under `web/assets/game-boy/`.
+
 ### PSP
 
 Needs the [cargo-psp](https://github.com/overdrivenpotato/rust-psp) toolchain,
@@ -138,7 +161,7 @@ occlusion to do it. Solid geometry and the Game Boy UI layer are unaffected —
 ## Tests
 
 ```sh
-bun test                    # 226 tests; ROM-gated suites skip with a reason
+bun test                    # 241 tests; ROM-gated suites skip with a reason
 bun tools/voxel.ts check    # both quality rungs' frame hashes
 bun tests/e2e/voxel-ppsspp.ts   # GE-vs-sim parity at 11 story marks
 ```

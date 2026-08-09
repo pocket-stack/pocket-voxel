@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#071019" />
+    <meta
+      name="description"
+      content="Insert a ROM you own and play Pocket Voxel inside an interactive 3D handheld."
+    />
+    <title>Pocket Voxel — A world in your pocket</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="landing-glow glow-mint" aria-hidden="true"></div>
+    <div class="landing-glow glow-rose" aria-hidden="true"></div>
+
+    <header class="landing-nav">
+      <a class="brand" href="./" aria-label="Pocket Voxel home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>POCKET <b>VOXEL</b></span>
+      </a>
+      <p class="local-note"><span aria-hidden="true"></span> ROM processing stays local</p>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">A CARTRIDGE-SIZED 3D WORLD</p>
+          <h1 id="hero-title">Put the whole adventure<br />in your pocket.</h1>
+          <p class="hero-lede">
+            Insert a Pokémon Red cartridge dump you own. Pocket Voxel builds the diorama in this
+            tab, then plays it on the screen and controls of a tactile 3D handheld.
+          </p>
+          <button id="choose-rom" class="insert-button" type="button">
+            <span>Insert your ROM</span><i aria-hidden="true">↗</i>
+          </button>
+          <input id="rom-file" type="file" accept=".gb,application/octet-stream" hidden />
+          <div
+            id="progress-track"
+            class="sr-only"
+            role="progressbar"
+            aria-label="ROM baking progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          ></div>
+        </div>
+
+        <div id="gameboy-stage" class="device-stage" data-state="idle">
+          <div id="stage-viewport" class="stage-viewport" data-stage-viewport>
+            <canvas
+              id="stage-canvas"
+              class="stage-canvas"
+              tabindex="0"
+              aria-label="Interactive 3D Game Boy. Drag to rotate; use its controls, keyboard, or gamepad to play."
+            ></canvas>
+            <canvas id="screen" width="480" height="272" aria-hidden="true"></canvas>
+          </div>
+          <div class="stage-meta" aria-live="polite">
+            <p><span class="status-light" aria-hidden="true"></span><b id="stage-status">READY FOR CARTRIDGE</b></p>
+            <p id="stage-hint">Click the LCD or drop a ROM anywhere</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="play-notes" aria-label="Controls and privacy">
+        <p><b>PLAY</b> Arrows / WASD · Z / J = A · X / K = B · Enter = Start</p>
+        <p><b>PRIVATE</b> No ROM bytes or baked game data leave this browser.</p>
+      </section>
+    </main>
+
+    <footer class="landing-footer">
+      <p>Bring a ROM you lawfully own. Pocket Voxel includes no game content.</p>
+      <p>
+        <a href="https://poly.pizza/m/dczUnD4aslM">“Gameboy” by Jason Toff</a>,
+        <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>, modified.
+        <a href="./assets/game-boy/ATTRIBUTION.md">Model notice</a> ·
+        <a href="./third-party/gen1recomp-LICENSE.md">Source notice</a> ·
+        <a href="./third-party/DramaticShapeVoxelMod-LICENSE.txt">Voxel notice</a> ·
+        <a href="./third-party/runtime/THIRD_PARTY_NOTICES.md">Code notices</a>
+      </p>
+    </footer>
+
+    <div id="drag-overlay" class="drag-overlay" aria-hidden="true"><strong>INSERT CARTRIDGE</strong></div>
+    <p id="live-status" class="sr-only" aria-live="polite"></p>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

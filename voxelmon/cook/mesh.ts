@@ -76,7 +76,7 @@ export interface MapGeometry {
 }
 
 /** Emit the full geometry for one analysed map (bodyOnly = false). */
-export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
+export function runGeometry(map: GameMap, S: SGrid, keepHidden = false): MapGeometry {
   const terrain: Quad[] = [];
   const water: Quad[] = [];
   const perRow = map.tileset.tilesPerRow || 16;
@@ -552,14 +552,22 @@ export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
   // after the shading and ground votes that read the full face set. Grass
   // and flower pass PULLED — the backend displaces their vertices toward the
   // camera, so their cooked facing is not their drawn facing.
-  for (const [key, quads] of stamps) stamps.set(key, cullHidden(quads));
+  for (const [key, quads] of stamps) stamps.set(key, cullHidden(quads, false, keepHidden));
   return {
-    terrain: cullHidden(terrain),
-    treeCoarse: cullHidden(treeCoarse),
-    treeBox: cullHidden(treeBox),
-    water: cullHidden(water),
-    grass: cullHidden(S.grassQuads.map((q) => ({ ...q, shade: groundShades(q) })), PULLED),
-    flower: cullHidden(S.flowerQuads.map((q) => ({ ...q, shade: groundShades(q) })), PULLED),
+    terrain: cullHidden(terrain, false, keepHidden),
+    treeCoarse: cullHidden(treeCoarse, false, keepHidden),
+    treeBox: cullHidden(treeBox, false, keepHidden),
+    water: cullHidden(water, false, keepHidden),
+    grass: cullHidden(
+      S.grassQuads.map((q) => ({ ...q, shade: groundShades(q) })),
+      PULLED,
+      keepHidden,
+    ),
+    flower: cullHidden(
+      S.flowerQuads.map((q) => ({ ...q, shade: groundShades(q) })),
+      PULLED,
+      keepHidden,
+    ),
     stamps,
   };
 }

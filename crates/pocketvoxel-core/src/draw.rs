@@ -942,9 +942,9 @@ mod tests {
     /// (the orbit camera stands to the south and looks -Z, so that is the
     /// direction distance is visible in), each carrying terrain + both tree
     /// levels + grass + flower. The far chunk is inside the chunk cap
-    /// (384 px < 340 + 64) and outside every detail dial, so it is exactly
-    /// the chunk a fade is supposed to strip and the cap is not.
-    fn fading_pak_bytes(tree_lod: bool) -> alloc::vec::Vec<u8> {
+    /// (384 px < 340 + 64), so it proves the current PSP rung applies one
+    /// uniform representation throughout the visible field.
+    fn quality_pak_bytes(tree_lod: bool) -> alloc::vec::Vec<u8> {
         use crate::pak::builder::{ChunkDef, PakBuilder};
         use crate::pak::{MeshRange, PakVert};
         let mut b = PakBuilder::new();
@@ -995,8 +995,7 @@ mod tests {
             quad(0, 0, 64, 64),
             quad(64, 64, 128, 128),
         ];
-        // One chunk north (128 px): outside the psp rung's fine reach
-        // (0 + half), inside its coarse reach (128 + half) — the middle ring.
+        // One chunk north (128 px): still inside the same uniform PSP rung.
         let mid = [
             quad(0, -128, 128, 0),
             empty,
@@ -1028,12 +1027,11 @@ mod tests {
         b.finish()
     }
 
-    /// The rung's grass/flower dials strip the far chunk's DETAIL meshes and
-    /// nothing else: the same chunk's terrain still draws, because terrain is
-    /// the silhouette and only the chunk cap bounds it.
+    /// The current PSP rung has no moving representation boundary: it keeps
+    /// grass/flowers and the coarse tree carve everywhere inside the chunk cap.
     #[test]
-    fn detail_meshes_fade_with_the_rung() {
-        let blob = pak::AlignedBlob::from_bytes(&fading_pak_bytes(true));
+    fn detail_meshes_are_uniform_on_the_psp_rung() {
+        let blob = pak::AlignedBlob::from_bytes(&quality_pak_bytes(true));
         let pak = pak::read(blob.bytes()).unwrap();
         let kinds = |tier: u8| -> alloc::vec::Vec<(u16, u32)> {
             let mut s = Scene::new();
@@ -1075,11 +1073,10 @@ mod tests {
             3,
             "a detail dial never touches terrain — the silhouette must not move"
         );
-        assert_eq!(count(&psp, mesh_kind::GRASS), 2, "the far grass faded");
-        assert_eq!(count(&psp, mesh_kind::FLOWER), 2);
-        // The psp rung's fine dial is OFF (`QUALITY_OFF`): every carved
-        // tree in reach — the chunk underfoot included — is the coarse one,
-        // and the far ring boxes. Swapped, never dropped.
+        assert_eq!(count(&psp, mesh_kind::GRASS), 3, "grass is uniform in view");
+        assert_eq!(count(&psp, mesh_kind::FLOWER), 3);
+        // The psp rung's fine dial is OFF (`QUALITY_OFF`): every carved tree
+        // in reach — the chunk underfoot included — is uniformly coarse.
         assert_eq!(
             count(&psp, mesh_kind::TREE_HULL),
             0,
@@ -1087,10 +1084,10 @@ mod tests {
         );
         assert_eq!(
             count(&psp, mesh_kind::TREE_COARSE),
-            2,
-            "underfoot and the middle ring both carve at 2x2"
+            3,
+            "every visible ring carves at 2x2"
         );
-        assert_eq!(count(&psp, mesh_kind::TREE_BOX), 1, "the far ring boxes");
+        assert_eq!(count(&psp, mesh_kind::TREE_BOX), 0, "no moving box boundary");
     }
 
     /// `QUALITY_OFF` means off: the half-extent widening lets even a 0 dial
@@ -1111,7 +1108,7 @@ mod tests {
     /// the carved hull a rung did not ask for is merely slow.
     #[test]
     fn a_pak_without_the_lod_flag_keeps_the_level_it_carries() {
-        let blob = pak::AlignedBlob::from_bytes(&fading_pak_bytes(false));
+        let blob = pak::AlignedBlob::from_bytes(&quality_pak_bytes(false));
         let pak = pak::read(blob.bytes()).unwrap();
         assert!(!pak.has_tree_lod());
         for tier in [spec::quality_tier::PSP, spec::quality_tier::DESKTOP] {
