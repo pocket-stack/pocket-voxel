@@ -104,6 +104,9 @@ cannot collide with the crate's own contract values:
 | `--banks` | 0 = `PV3DS_ARENA_BANKS` | banks it is split into |
 | `--texture-mib` | 14 | linear memory held back for the expanded textures |
 | `--heap-mib` / `--linear-mib` | 0 | libctru's split; zero is its automatic one |
+| `--frame-wait-ms` | 4000 | deadline on each of the frame's two GPU waits |
+| `--heartbeat` | 1, and 0 for `--capture` | write `sdmc:/pocketvoxel-3ds/hb.txt` |
+| `--heartbeat-ticks` | 30 | the heartbeat's tick cadence |
 
 The arena claim is adaptive: it asks for the crate's budget, holds back the
 texture reserve, and halves down to a 2 MiB floor rather than refusing to boot —
@@ -115,6 +118,58 @@ screen along with the per-frame counters.
 `--heap-mib` and `--linear-mib` are set **together or not at all**: libctru only
 takes its automatic split when neither is given, so a lone override leaves the
 other heap at zero bytes. The build command refuses the half-set pair.
+
+## When a run stops
+
+A wedged run is not an erroring run: `fail()` never happens, so nothing is
+written, the top screen keeps its last frame, `aptMainLoop` is never reached
+again so HOME stops responding, and the bottom screen's counter line only
+refreshes every 30 ticks. A run that stops inside the first 30 therefore used to
+say nothing at all about where it stopped. Three things now make it talk.
+
+**Every step of the frame names itself** in `voxel_host_stage` before it runs —
+`guest-frame`, `tick`, `record`, `gfx-prepare`, `frame-sync`, `frame-begin`,
+`clear`, `draw-walk`, `frame-end`, `readback`, `apt`. It is a store into a
+global, not a syscall, so it costs nothing per frame and a debugger on a halted
+console reads it directly: `p voxel_host_stage`, `p voxel_host_tick`.
+
+**The heartbeat writes the same facts to the SD card**, one truncated line in
+`sdmc:/pocketvoxel-3ds/hb.txt`, so a wedge is readable over FTP with no
+debugger:
+
+```
+tick 1334 stage frame-end scene 1335 items 15 rung 0 draws 14 verts 1455 idx 4590 …
+```
+
+It writes every 30 ticks and, once the first frame is behind it, on every stage
+change — because the wedge this was built for happened inside the first 30
+ticks, where a tick cadence names neither the frame nor the step. That costs one
+SD write per stage change and does not hold 60 Hz; `--heartbeat 0` turns the
+file off and leaves the free part. This is the PSP capture path's mechanism
+(`crates/pocketvoxel-psp/src/capture.rs`) with the stage and the counters added.
+
+**Neither of the frame's waits on the GPU can block forever.**
+`C3D_FrameBegin(C3D_FRAME_SYNCDRAW)` is two waits and neither ends on its own:
+`C3D_FrameSync` blocks until both screens' vblank counters advance, which needs
+the process to still be receiving GSP events, and the queue wait blocks until
+the GPU has drained the previous frame's commands — which is what makes the
+arena bank the next record rewinds safe. So the host does the two halves itself,
+each polled against a deadline: the vblank counters through `C3D_FrameCounter`,
+the queue through `C3D_FrameBegin(C3D_FRAME_NONBLOCK)`. On expiry the run writes
+an error naming the stage, the tick and the counters, then parks exactly as
+`fail()` does:
+
+```
+the GPU never finished the previous frame within 1000 ms: stage frame-begin, tick 0, …
+```
+
+The deadline is four seconds by default — about 240 frames — and it is measured
+in **system ticks** (`svcGetSystemTick`, `SYSCLOCK_ARM11`), not wall time, so
+neither a heavy frame nor a slow emulator approaches it. A run at 20 ms, 200x
+tighter, still completed 1334 ticks under Azahar without tripping. The deadline
+also restarts while `aptIsActive()` is false, so the HOME menu and sleep — which
+stop this process's vblank events on purpose — cannot be mistaken for a wedge.
+`--frame-wait-ms 0` expires at once, which is the drill.
 
 ## Acceptance
 

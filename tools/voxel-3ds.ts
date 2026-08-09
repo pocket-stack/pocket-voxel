@@ -4,6 +4,10 @@
 //   bun tools/voxel-3ds.ts --capture        the deterministic e2e binary
 //   bun tools/voxel-3ds.ts --cia            also emit an installable CIA
 //   bun tools/voxel-3ds.ts --arena-mib 8 --texture-mib 16
+//   bun tools/voxel-3ds.ts --frame-wait-ms 0   the wedge drill: every GPU wait
+//                                              expires at once, so the run
+//                                              writes its error file instead
+//                                              of stopping on a black screen
 //
 // The toolchain spans two environments, exactly as the PocketJS 3DS host's
 // does. The Rust half compiles on macOS: armv6k-nintendo-3ds is a built-in
@@ -155,6 +159,11 @@ export interface VoxelThreeDsArguments {
   readonly textureMib: number;
   readonly heapMib: number;
   readonly linearMib: number;
+  /** Deadline on each of the frame's two GPU waits; 0 is the wedge drill. */
+  readonly frameWaitMs: number;
+  /** 1 writes sdmc:/pocketvoxel-3ds/hb.txt, 0 does not. */
+  readonly heartbeat: number;
+  readonly heartbeatTicks: number;
   /** Everything unrecognized, forwarded to cargo. */
   readonly cargoArgs: readonly string[];
 }
@@ -162,7 +171,8 @@ export interface VoxelThreeDsArguments {
 const USAGE =
   "usage: bun tools/voxel-3ds.ts [--capture] [--cia] [--trace <path>] [--skip-bundle] " +
   "[--package-outdir <dir>] [--arena-mib N] [--banks N] [--texture-mib N] " +
-  "[--heap-mib N] [--linear-mib N] [cargo args…]";
+  "[--heap-mib N] [--linear-mib N] [--frame-wait-ms N] [--heartbeat 0|1] " +
+  "[--heartbeat-ticks N] [cargo args…]";
 
 function numberFlag(
   argv: readonly string[],
@@ -198,7 +208,11 @@ export function parseVoxelThreeDsArguments(
     "texture-mib",
     "heap-mib",
     "linear-mib",
+    "frame-wait-ms",
+    "heartbeat",
+    "heartbeat-ticks",
   ]);
+  const capture = argv.includes("--capture");
   const cargoArgs: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -210,7 +224,7 @@ export function parseVoxelThreeDsArguments(
     cargoArgs.push(a);
   }
   return {
-    capture: argv.includes("--capture"),
+    capture,
     cia: argv.includes("--cia"),
     skipBundle: argv.includes("--skip-bundle"),
     tracePath: resolvePath(repository, stringFlag(argv, "trace", DEFAULT_TRACE)),
@@ -228,6 +242,29 @@ export function parseVoxelThreeDsArguments(
     textureMib: numberFlag(argv, "texture-mib", Number(process.env.PV3DS_HOST_TEXTURE_MIB ?? 14)),
     heapMib: numberFlag(argv, "heap-mib", Number(process.env.PV3DS_HOST_HEAP_MIB ?? 0)),
     linearMib: numberFlag(argv, "linear-mib", Number(process.env.PV3DS_HOST_LINEAR_MIB ?? 0)),
+    // Four seconds is about 240 frames — two orders of magnitude past the
+    // heaviest frame the diorama draws, and measured in system ticks rather
+    // than wall time, so neither a slow frame nor a slow emulator reaches it.
+    // Zero expires at once, which is how a wedge is drilled.
+    frameWaitMs: numberFlag(
+      argv,
+      "frame-wait-ms",
+      Number(process.env.PV3DS_HOST_FRAME_WAIT_MS ?? 4000),
+    ),
+    // The heartbeat is a hardware diagnostic: it costs one SD write per stage
+    // change, so a run with it on does not hold 60 Hz. A capture build leaves
+    // it off — its SD directory is the one the e2e driver reads, and the
+    // golden path keeps exactly the writes the goldens were recorded with.
+    heartbeat: numberFlag(
+      argv,
+      "heartbeat",
+      Number(process.env.PV3DS_HOST_HEARTBEAT ?? (capture ? 0 : 1)),
+    ),
+    heartbeatTicks: numberFlag(
+      argv,
+      "heartbeat-ticks",
+      Number(process.env.PV3DS_HOST_HEARTBEAT_TICKS ?? 30),
+    ),
     cargoArgs,
   };
 }
@@ -789,6 +826,9 @@ export async function buildVoxel3ds(argv: readonly string[]): Promise<string> {
     PV3DS_HOST_TEXTURE_MIB: String(args.textureMib),
     PV3DS_HOST_HEAP_MIB: String(args.heapMib),
     PV3DS_HOST_LINEAR_MIB: String(args.linearMib),
+    PV3DS_HOST_FRAME_WAIT_MS: String(args.frameWaitMs),
+    PV3DS_HOST_HEARTBEAT: String(args.heartbeat),
+    PV3DS_HOST_HEARTBEAT_TICKS: String(args.heartbeatTicks),
     PV3DS_CAPTURE: args.capture ? "1" : "",
     // Always explicit, never inherited: an unset variable would let a previous
     // run's tape linger in the object cache behind unchanged source mtimes,

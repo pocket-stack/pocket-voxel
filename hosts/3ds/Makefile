@@ -36,6 +36,16 @@
 #   PV3DS_HOST_HEAP_MIB    libctru heap override; 0 = automatic
 #   PV3DS_HOST_LINEAR_MIB  libctru linear heap override; 0 = automatic
 #
+# The diagnosability knobs, the same way:
+#
+#   PV3DS_HOST_FRAME_WAIT_MS    deadline on each of the frame's two GPU waits;
+#                               0 expires at once, which is the wedge drill
+#   PV3DS_HOST_HEARTBEAT        1 writes sdmc:/pocketvoxel-3ds/hb.txt, 0 does
+#                               not (the capture build's default, so the golden
+#                               path keeps the writes it was recorded with)
+#   PV3DS_HOST_HEARTBEAT_TICKS  the heartbeat's tick cadence; 0 leaves only the
+#                               stage-change writes
+#
 # The tape and the marks travel INSIDE the binary: a capture run never reads
 # the emulator's filesystem for its input. Nothing is written outside
 # PV3DS_BUILD_DIR, PV3DS_OUT_3DSX and PV3DS_OUT_CIA.
@@ -84,6 +94,9 @@ CFLAGS := -Wall -Wextra -O2 -g -std=gnu11 -mword-relocations -ffunction-sections
   -DPV3DS_HOST_TEXTURE_MIB=$(PV3DS_HOST_TEXTURE_MIB) \
   -DPV3DS_HOST_HEAP_MIB=$(PV3DS_HOST_HEAP_MIB) \
   -DPV3DS_HOST_LINEAR_MIB=$(PV3DS_HOST_LINEAR_MIB) \
+  -DPV3DS_HOST_FRAME_WAIT_MS=$(PV3DS_HOST_FRAME_WAIT_MS) \
+  -DPV3DS_HOST_HEARTBEAT=$(PV3DS_HOST_HEARTBEAT) \
+  -DPV3DS_HOST_HEARTBEAT_TICKS=$(PV3DS_HOST_HEARTBEAT_TICKS) \
   -I$(PV3DS_APP_INCLUDE) -I$(PV3DS_PICA_INCLUDE) -I$(BUILD) \
   -I$(PV3DS_QUICKJS_DIR) -I$(DEVKITPRO)/libctru/include
 

@@ -824,6 +824,24 @@ walked against the corrected capture.
     **not** the `-max` identity anchors, which are never re-recorded
     (`docs/VOXEL.md:641-645`).
 
+**A run that stops**
+
+34. **The run wedges.** Not one of the failures above: nothing is drawn wrong,
+    the console simply stops. The top screen holds its last frame, HOME stops
+    responding because `aptMainLoop` is never reached again, and no error file
+    appears — the run is blocked, not failing, so `fail()` never happens.
+
+    Two files name it. `sdmc:/pocketvoxel-3ds/hb.txt` carries the last tick, the
+    stage and the frame's counters, rewritten on every stage change past the
+    first frame. If a deadline expires, the error file carries the same facts
+    plus which wait it was: `frame-sync` is the vblank counters (this process
+    has stopped receiving GSP events), `frame-begin` is the command queue (the
+    GPU never finished the previous frame). A halted console can be read
+    directly instead: `p voxel_host_stage`, `p voxel_host_tick`.
+
+    An hb.txt that never appears at all is its own finding — the card is
+    unwritable, since the file is created before the first frame runs.
+
 ---
 
 ## 7. State the backend must set, per pass
@@ -886,6 +904,16 @@ That is the GE composition (`gu/lib.rs:17-26`, and the shipped loop at
 `crates/pocketvoxel-psp/src/main.rs:437-445`) with `sceGuStart`/`Finish`/`Sync`
 /`SwapBuffers` replaced. The rewind rule is unchanged and is the reason it is
 written out: the GPU reads the arena asynchronously (`pool.rs:39-43`).
+
+`C3D_FrameBegin` above is **two waits, and neither ends on its own**:
+`C3D_FrameSync` waits for both screens' vblank counters, which needs the process
+to still be receiving GSP events, and the queue wait waits for the GPU to finish
+the previous frame, which is what the rewind rule depends on. The host runs the
+two halves itself against a deadline — `C3D_FrameCounter` for the first,
+`C3D_FrameBegin(C3D_FRAME_NONBLOCK)` polled for the second — so a GPU or a GSP
+that stops signalling produces an error file naming the stage and the tick
+rather than a black screen. The queue wait is unchanged in meaning, so the
+rewind rule holds exactly as written.
 
 Capture uses the explicit transfer, not `gfxGetFramebuffer` after `C3D_FrameEnd`
 — that buffer has already been swapped and reads back black **(brief)**.

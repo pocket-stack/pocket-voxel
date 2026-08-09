@@ -69,8 +69,9 @@ the power-of-two envelope, since the PICA has no texture matrix.
 below physical `0x18000000`, so the PSP's zero-copy "point the GE at the pak in
 place" is impossible: every visible vertex and index is staged into the host's
 `linearAlloc` arena each frame. The arena is banked — one bank per frame — so
-with two banks and a `C3D_FrameBegin(C3D_FRAME_SYNCDRAW)` host loop the bank
-being rewound is two frames old and the GPU is provably done with it.
+with two banks and a host loop that waits for the GPU command queue to drain in
+`C3D_FrameBegin` (either flag spelling: blocking, or `C3D_FRAME_NONBLOCK`
+polled) the bank being rewound is two frames old and provably idle.
 
 The arena cannot grow (only the host can call `linearAlloc`), so an allocation
 that does not fit **drops that draw and counts it** in `Stats::dropped_arena`

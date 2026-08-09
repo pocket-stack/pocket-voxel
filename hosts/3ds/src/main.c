@@ -21,6 +21,12 @@
  * 7 px of bar top and bottom. The bars carry the sky pass's own clear colour,
  * because that clear covers the whole framebuffer.
  *
+ * Every step of that loop names itself in `voxel_host_stage` before it runs,
+ * and the two waits the frame makes on the GPU carry deadlines rather than
+ * blocking forever. A run that stops therefore leaves a stage, a tick and a
+ * set of counters behind — in sdmc:/pocketvoxel-3ds/hb.txt while it is still
+ * running, and in the error file if a deadline expires.
+ *
  * Building with -DPV3DS_CAPTURE turns this into the deterministic e2e binary:
  * input comes from a baked tape instead of the hardware, only the mark ticks
  * render, each mark's render target is read back into
@@ -69,8 +75,9 @@
  *                 ~0.9 MB of indices.
  *   ARENA_BANKS   0 means PV3DS_ARENA_BANKS. Two is what makes the rewind
  *                 safe: a present rewinds one bank, so with two banks and a
- *                 C3D_FrameBegin(C3D_FRAME_SYNCDRAW) loop the bank being
- *                 rewound is two frames old and the GPU is provably done.
+ *                 loop whose C3D_FrameBegin waits for the command queue to
+ *                 drain (frame_begin_bounded below), the bank being rewound is
+ *                 two frames old and the GPU is provably done.
  *   TEXTURE_MIB   linear memory held back for the expanded texture set. The
  *                 whole reachable set is 541 textures / 12.70 MiB, measured
  *                 over the shipped pak, and nothing is ever evicted.
@@ -177,6 +184,164 @@ static u8 *capture_rgb;
 #define REPORT_PATH "sdmc:/pocketvoxel-3ds-memory.txt"
 #endif
 
+// ---------------------------------------------------------------------------
+// the stage breadcrumb and the heartbeat
+// ---------------------------------------------------------------------------
+
+/*
+ * What a run that stops leaves behind.
+ *
+ * A wedged run is not an erroring run: fail() never happens, so no error file
+ * is written, the top screen keeps its last frame, and the bottom screen's
+ * counter line only refreshes every 30 ticks — a run that stops inside the
+ * first 30 says nothing at all about where it stopped.
+ *
+ * Two cheap things fix that.
+ *
+ *   THE STAGE is a plain store into a global before each step of the frame:
+ *   no syscall, no formatting, no file. A debugger attached to a halted
+ *   console reads it directly (`p voxel_host_stage`, `p voxel_host_tick`).
+ *   voxel_host_tick is the HOST's tick counter, which is the frame number;
+ *   the Scene's own clock is reported next to it.
+ *
+ *   THE HEARTBEAT spends one truncating SD write to put the same facts in a
+ *   file a harness can read over FTP with no debugger at all:
+ *   sdmc:/pocketvoxel-3ds/hb.txt, one line, rewritten in place. This is the
+ *   PSP capture path's mechanism (crates/pocketvoxel-psp/src/capture.rs
+ *   heartbeat()) with the stage and the frame's counters added.
+ *
+ * A write costs an SD round trip, so writing on every stage change does not
+ * hold 60 Hz. That is the trade this build makes: PV3DS_HOST_HEARTBEAT=0
+ * turns the file off entirely and leaves the stage store, which is free.
+ *
+ *   PV3DS_HOST_HEARTBEAT        1 writes the file, 0 does not. A capture build
+ *                               defaults to 0 (tools/voxel-3ds.ts): its SD
+ *                               directory is the one the e2e driver reads, and
+ *                               the golden path keeps exactly the writes it had
+ *                               when the goldens were recorded.
+ *   PV3DS_HOST_HEARTBEAT_TICKS  the tick cadence. 0 leaves only the
+ *                               stage-change writes.
+ */
+#ifndef PV3DS_HOST_HEARTBEAT
+#define PV3DS_HOST_HEARTBEAT 1
+#endif
+#ifndef PV3DS_HOST_HEARTBEAT_TICKS
+#define PV3DS_HOST_HEARTBEAT_TICKS 30
+#endif
+
+/* A capture build already owns this directory; a playable build creates it
+ * next to the two files it writes beside. */
+#ifdef PV3DS_CAPTURE
+#define HEARTBEAT_DIR CAPTURE_DIR
+#else
+#define HEARTBEAT_DIR "sdmc:/pocketvoxel-3ds"
+#endif
+#define HEARTBEAT_PATH HEARTBEAT_DIR "/hb.txt"
+
+/* The divisor is never the literal 0 a zero cadence would otherwise make. */
+#define HEARTBEAT_TICKS (PV3DS_HOST_HEARTBEAT_TICKS > 0 ? PV3DS_HOST_HEARTBEAT_TICKS : 1)
+#define HEARTBEAT_ON_TICK(tick) \
+  (PV3DS_HOST_HEARTBEAT_TICKS > 0 && ((tick) % HEARTBEAT_TICKS) == 0)
+
+/* The steps of a frame, in the order the loop runs them. A new one needs its
+ * name in STAGE_NAMES below or it reports as "?". */
+typedef enum {
+  STAGE_BOOT = 0,
+  STAGE_PAK,
+  STAGE_GUEST_BOOT,
+  STAGE_APT,
+  STAGE_INPUT,
+  STAGE_GUEST_FRAME,
+  STAGE_TICK,
+  STAGE_COLLECT,
+  STAGE_RECORD,
+  STAGE_PREPARE,
+  STAGE_FRAME_SYNC,
+  STAGE_FRAME_BEGIN,
+  STAGE_CLEAR,
+  STAGE_DRAW,
+  STAGE_FRAME_END,
+  STAGE_READBACK,
+  STAGE_COUNT
+} HostStage;
+
+static const char *const STAGE_NAMES[STAGE_COUNT] = {
+  [STAGE_BOOT] = "boot",
+  [STAGE_PAK] = "pak",
+  [STAGE_GUEST_BOOT] = "guest-boot",
+  [STAGE_APT] = "apt",
+  [STAGE_INPUT] = "input",
+  [STAGE_GUEST_FRAME] = "guest-frame",
+  [STAGE_TICK] = "tick",
+  [STAGE_COLLECT] = "collect",
+  [STAGE_RECORD] = "record",
+  [STAGE_PREPARE] = "gfx-prepare",
+  [STAGE_FRAME_SYNC] = "frame-sync",
+  [STAGE_FRAME_BEGIN] = "frame-begin",
+  [STAGE_CLEAR] = "clear",
+  [STAGE_DRAW] = "draw-walk",
+  [STAGE_FRAME_END] = "frame-end",
+  [STAGE_READBACK] = "readback",
+};
+
+/* External linkage and volatile on purpose: a debugger names them, and the
+ * store must stay where the source puts it rather than sink past the call it
+ * labels. */
+volatile uint8_t voxel_host_stage = STAGE_BOOT;
+volatile uint32_t voxel_host_tick = 0;
+
+static const char *stage_name(void) {
+  uint8_t index = voxel_host_stage;
+  const char *name = index < STAGE_COUNT ? STAGE_NAMES[index] : NULL;
+  return name == NULL ? "?" : name;
+}
+
+#if PV3DS_HOST_HEARTBEAT
+static bool heartbeat_ready;      /* HEARTBEAT_DIR exists and may be written */
+static bool heartbeat_all_stages; /* every stage change writes, not only the cadence */
+#endif
+
+/*
+ * One line, truncate-written: the tick, the stage, and the counters the bottom
+ * screen prints. Truncating rather than appending keeps the file one sector
+ * whatever the run's length, and leaves the LAST line — the only one a wedge
+ * is asked about — at the top of the file.
+ *
+ * A failed open returns silently. The heartbeat is a diagnostic and must never
+ * be the thing that stops a run.
+ */
+static void heartbeat(void) {
+#if PV3DS_HOST_HEARTBEAT
+  if (!heartbeat_ready) return;
+  PvVox3dsStats scene;
+  pv3ds_stats(&scene);
+  FILE *file = fopen(HEARTBEAT_PATH, "wb");
+  if (file == NULL) return;
+  fprintf(
+    file,
+    "tick %lu stage %s scene %lu items %lu rung %lu %s\n",
+    (unsigned long)voxel_host_tick,
+    stage_name(),
+    (unsigned long)scene.scene_tick,
+    (unsigned long)scene.draw_items,
+    (unsigned long)scene.quality_tier,
+    voxel_gfx_stats_line()
+  );
+  fclose(file);
+#endif
+}
+
+/* Enter a stage. The store is the whole cost until the first frame is behind
+ * us; after that every change also writes, because the wedge this exists for
+ * happened inside the first 30 ticks and a tick cadence would have named
+ * neither the frame nor the step. */
+static void stage_enter(HostStage next) {
+  voxel_host_stage = (uint8_t)next;
+#if PV3DS_HOST_HEARTBEAT
+  if (heartbeat_all_stages) heartbeat();
+#endif
+}
+
 /*
  * Write down the memory this title was actually given.
  *
@@ -249,7 +414,123 @@ static void fail(const char *message) {
     fputs("\n", file);
     fclose(file);
   }
+  /* Park on the vblank event rather than spinning: the thread sleeps, so
+   * Rosalina and a GDB stub can still take the console. */
   for (;;) gspWaitForVBlank();
+}
+
+// ---------------------------------------------------------------------------
+// the two waits a frame makes on the GPU
+// ---------------------------------------------------------------------------
+
+/*
+ * C3D_FrameBegin(C3D_FRAME_SYNCDRAW) is two waits, and neither of them can end
+ * on its own (citro3d source/renderqueue.c):
+ *
+ *   C3D_FrameSync()             blocks until BOTH screens' vblank counters
+ *                               have advanced. Those counters are incremented
+ *                               from libctru's GSP event thread, so this is
+ *                               the 60 Hz pacing and it needs the process to
+ *                               still be receiving GSP events.
+ *   C3Di_WaitAndClearQueue(-1)  blocks until the GX command queue has drained,
+ *                               which is the GPU finishing the previous frame.
+ *                               That is what makes the arena bank the next
+ *                               record rewinds safe to overwrite.
+ *
+ * A run whose GSP events stop sits in the first forever; a run whose GPU never
+ * finishes sits in the second forever. Neither leaves a trace: the top screen
+ * keeps its last frame, aptMainLoop is never reached again so HOME does
+ * nothing, and nothing is written to the SD card.
+ *
+ * So each wait keeps its meaning and gains a deadline. The clock is
+ * svcGetSystemTick, which runs at SYSCLOCK_ARM11 whatever the CPU is clocked
+ * at, and which the CIA's exheader already grants (app.rsf SystemCallAccess
+ * GetSystemTick). On expiry the run writes an error naming the stage, the tick
+ * and the frame's counters, then parks exactly as fail() does — the failure
+ * becomes a file instead of a black screen.
+ *
+ * PV3DS_HOST_FRAME_WAIT_MS is the deadline, four seconds by default: about 240
+ * frames, two orders of magnitude past the heaviest frame the diorama draws,
+ * so a merely slow frame cannot reach it. It is measured in SYSTEM ticks, not
+ * wall time, so an emulator that takes wall-clock seconds over one frame does
+ * not approach it either. Zero expires immediately, which is the wedge drill.
+ */
+#ifndef PV3DS_HOST_FRAME_WAIT_MS
+#define PV3DS_HOST_FRAME_WAIT_MS 4000
+#endif
+
+#define FRAME_WAIT_TICKS \
+  ((u64)PV3DS_HOST_FRAME_WAIT_MS * (u64)(SYSCLOCK_ARM11 / 1000u))
+
+static bool wait_expired(u64 start) {
+  return (svcGetSystemTick() - start) >= FRAME_WAIT_TICKS;
+}
+
+/* Sleep on the kernel timer between polls, never on a GPU event: a bounded
+ * wait must not depend on the subsystem it is bounding. One millisecond
+ * against a 16.7 ms vblank is ~17 polls a frame. */
+static void poll_gap(void) {
+  svcSleepThread(1000000ll);
+}
+
+/*
+ * C3D_FrameSync's own condition — both vblank counters advanced — polled
+ * against the deadline. `rounds` is how many vblank rounds to wait for.
+ *
+ * A suspended run stops receiving vblank events on purpose (the HOME menu,
+ * sleep), so the deadline restarts while aptIsActive() is false: a suspension
+ * belongs to aptMainLoop at the top of the frame loop, not to this wait.
+ */
+static bool vblank_settle(u32 rounds) {
+  for (u32 round = 0; round < rounds; round += 1) {
+    u32 top = C3D_FrameCounter(0);
+    u32 bottom = C3D_FrameCounter(1);
+    u64 start = svcGetSystemTick();
+    while (C3D_FrameCounter(0) == top || C3D_FrameCounter(1) == bottom) {
+      if (!aptIsActive()) start = svcGetSystemTick();
+      else if (wait_expired(start)) return false;
+      poll_gap();
+    }
+  }
+  return true;
+}
+
+/*
+ * C3D_FrameBegin's queue wait, polled: C3D_FRAME_NONBLOCK returns false while
+ * the GPU still owns the previous frame. Succeeding here carries exactly the
+ * guarantee the blocking form gave — the command queue has drained — so the
+ * arena bank the next record rewinds is still provably free.
+ */
+static bool frame_begin_bounded(void) {
+  u64 start = svcGetSystemTick();
+  while (!C3D_FrameBegin(C3D_FRAME_NONBLOCK)) {
+    if (!aptIsActive()) start = svcGetSystemTick();
+    else if (wait_expired(start)) return false;
+    poll_gap();
+  }
+  return true;
+}
+
+/* A deadline expired. Name what was being waited for, the stage, the tick and
+ * the counters, in the error file and in the heartbeat, then park. */
+static void wedge(const char *waiting_for) {
+  PvVox3dsStats scene;
+  pv3ds_stats(&scene);
+  char message[288];
+  snprintf(
+    message,
+    sizeof message,
+    "%s within %lu ms: stage %s, tick %lu, scene tick %lu, items %lu, %s",
+    waiting_for,
+    (unsigned long)PV3DS_HOST_FRAME_WAIT_MS,
+    stage_name(),
+    (unsigned long)voxel_host_tick,
+    (unsigned long)scene.scene_tick,
+    (unsigned long)scene.draw_items,
+    voxel_gfx_stats_line()
+  );
+  heartbeat();
+  fail(message);
 }
 
 // ---------------------------------------------------------------------------
@@ -460,11 +741,18 @@ static int32_t mark_info(uint32_t tick, uint32_t *count_out, uint32_t *last_out)
  * decodes with src[(x * 240 + (239 - y)) * 4] -> dst[y * 400 + x].
  */
 static bool capture_write(int32_t mark) {
-  /* C3D_FrameEnd only queues the frame; the colour buffer is not finished
-   * until the GPU is. A voxel frame is far heavier than one screen of UI, so
-   * this waits on the frame itself rather than on the next vblank alone. */
-  C3D_FrameSync();
-  gspWaitForVBlank();
+  /*
+   * C3D_FrameEnd only queues the frame; the colour buffer is not finished
+   * until the GPU is. Two bounded vblank rounds replace the C3D_FrameSync plus
+   * gspWaitForVBlank this settled with — the same number of vblanks, with a
+   * deadline instead of a wait that cannot end.
+   *
+   * What actually guarantees the GPU has finished is the transfer below:
+   * C3D_SyncDisplayTransfer outside a frame drains the command queue before it
+   * issues the PPF job (citro3d C3Di_SafeDisplayTransfer), so the settle above
+   * is a settle and bounding it cannot change the pixels this reads.
+   */
+  if (!vblank_settle(2)) wedge("no vblank arrived before the readback");
   C3D_SyncDisplayTransfer(
     (u32 *)target->frameBuf.colorBuf,
     GX_BUFFER_DIM(TOP_SCREEN_H, TOP_SCREEN_W),
@@ -562,6 +850,7 @@ int main(void) {
   }
   if (pv3ds_init(arena, arena_bytes, ARENA_BANKS) != 0) fail(pv3ds_last_error());
 
+  stage_enter(STAGE_PAK);
   size_t pak_length = 0;
   uint8_t *pak = read_romfs_file(PAK_PATH, &pak_length, 16, false);
   if (pak == NULL) {
@@ -602,7 +891,16 @@ int main(void) {
 #endif
 
   if (!voxel_gfx_init()) fail("the PICA200 backend failed to initialize");
+  stage_enter(STAGE_GUEST_BOOT);
   if (!voxel_qjs_boot((const char *)guest, guest_length)) fail(voxel_qjs_last_error());
+
+#if PV3DS_HOST_HEARTBEAT
+  /* One directory for what a run leaves on the SD. mkdir before the first
+   * write, so an hb.txt that never appears means the card itself is
+   * unwritable rather than that the run never reached a frame. */
+  mkdir(HEARTBEAT_DIR, 0777);
+  heartbeat_ready = true;
+#endif
 
 #ifdef PV3DS_CAPTURE
   mkdir(CAPTURE_DIR, 0777);
@@ -616,7 +914,11 @@ int main(void) {
 #endif
 
   uint32_t tick = 0;
+  stage_enter(STAGE_APT);
   while (aptMainLoop()) {
+    voxel_host_tick = tick;
+    if (HEARTBEAT_ON_TICK(tick)) heartbeat();
+    stage_enter(STAGE_INPUT);
     hidScanInput();
 #ifdef PV3DS_CAPTURE
     int32_t buttons = scripted_buttons(tick);
@@ -625,6 +927,7 @@ int main(void) {
 #endif
 
     /* One guest turn per host tick: frame(buttons), exactly once. */
+    stage_enter(STAGE_GUEST_FRAME);
     if (!voxel_qjs_frame(buttons)) fail(voxel_qjs_last_error());
     /*
      * Read the warp-landing flag EVERY tick, never conditionally: a stale one
@@ -635,8 +938,12 @@ int main(void) {
     /* The tick clock is the only clock in the runtime — tile animation,
      * cursors, camera tweens — so it advances at a fixed 60 Hz whatever the
      * present cadence is. */
+    stage_enter(STAGE_TICK);
     pv3ds_tick();
-    if (landed) voxel_qjs_collect();
+    if (landed) {
+      stage_enter(STAGE_COLLECT);
+      voxel_qjs_collect();
+    }
 
 #ifdef PV3DS_CAPTURE
     /*
@@ -649,14 +956,25 @@ int main(void) {
     if (mark < 0) {
       if (tick > last_mark) fail("the tape ran past its last mark without dumping it");
       tick += 1;
+      stage_enter(STAGE_APT);
       continue;
     }
 #endif
 
+    stage_enter(STAGE_RECORD);
     if (pv3ds_present() != 0) fail(pv3ds_last_error());
+    stage_enter(STAGE_PREPARE);
     voxel_gfx_prepare();
 
-    C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+    /* The two halves of what C3D_FRAME_SYNCDRAW used to do in one call, each
+     * with its own deadline and its own name, so a run that stops in one of
+     * them says which. */
+    stage_enter(STAGE_FRAME_SYNC);
+    if (!vblank_settle(1)) wedge("no vblank arrived");
+    stage_enter(STAGE_FRAME_BEGIN);
+    if (!frame_begin_bounded()) wedge("the GPU never finished the previous frame");
+
+    stage_enter(STAGE_CLEAR);
     /* The clear the sky pass owns. It covers the whole framebuffer, so the
      * letterbox bars carry the sky colour too. */
     C3D_RenderTargetClear(target, C3D_CLEAR_ALL, voxel_gfx_clear_word(), 0);
@@ -668,13 +986,16 @@ int main(void) {
     uint32_t vh = 0;
     voxel_gfx_viewport(&vx, &vy, &vw, &vh);
     C3D_SetViewport(vx, vy, vw, vh);
+    stage_enter(STAGE_DRAW);
     voxel_gfx_render();
+    stage_enter(STAGE_FRAME_END);
     C3D_FrameEnd(0);
 
 #ifdef PV3DS_CAPTURE
     /* A frame that dropped a draw is missing geometry, which must never
      * become a golden. */
     if (voxel_gfx_dropped() > 0) fail("the frame dropped a draw during capture");
+    stage_enter(STAGE_READBACK);
     if (!capture_write(mark)) fail("capture write failed");
     /* The marks are ascending, so the last tick is the last file. Testing the
      * tick rather than the index keeps this true even if a tape ever names one
@@ -686,7 +1007,9 @@ int main(void) {
       report_memory("end", arena_bytes);
       capture_done();
       /* Park: Azahar does not stop when the app returns from main, and a
-       * still process is what the driver kills. */
+       * still process is what the driver kills. Blocking on the vblank event
+       * rather than spinning keeps the thread asleep, so Rosalina and a GDB
+       * stub can still take a parked console. */
       for (;;) gspWaitForVBlank();
     }
 #else
@@ -703,6 +1026,13 @@ int main(void) {
     }
 #endif
     tick += 1;
+#if PV3DS_HOST_HEARTBEAT
+    /* Past the first frame, every stage change writes. The wedge this was
+     * built for happened inside the first 30 ticks, where the tick cadence
+     * alone names neither the frame nor the step. */
+    heartbeat_all_stages = true;
+#endif
+    stage_enter(STAGE_APT);
   }
 
   voxel_qjs_shutdown();

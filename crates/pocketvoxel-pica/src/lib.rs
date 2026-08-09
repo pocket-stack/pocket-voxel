@@ -59,8 +59,9 @@
 //! ```
 //!
 //! The arena rewinds inside `record`, one bank per frame. With two banks and a
-//! `C3D_FrameBegin(C3D_FRAME_SYNCDRAW)` host loop the bank being rewound is
-//! two frames old, so the GPU is provably done with it.
+//! host loop whose `C3D_FrameBegin` waits for the GPU command queue to drain,
+//! the bank being rewound is two frames old, so the GPU is provably done with
+//! it.
 //!
 //! [`pocketvoxel-gu`]: https://docs.rs/pocketvoxel-gu
 

@@ -68,8 +68,9 @@ extern "C" {
  * Adopt the host's linear arena and reset the Scene. `arena` MUST be
  * linearAlloc memory: BufInfo_Add rejects any pointer below physical
  * 0x18000000, so malloc memory can never hold vertices. `banks >= 2` with a
- * C3D_FrameBegin(C3D_FRAME_SYNCDRAW) loop means the bank a present rewinds is
- * two frames old and the GPU is provably done with it.
+ * loop whose C3D_FrameBegin waits for the GPU command queue to drain means the
+ * bank a present rewinds is two frames old and the GPU is provably done with
+ * it.
  *
  * Returns 0, or -1 with pv3ds_last_error() set. Calling it again is a full
  * reset: a new Scene, and the arena re-adopted.
@@ -231,11 +232,12 @@ void pv3ds_tick(void);
  * pocketvoxel-pica. Returns 0, or -1 when no pak is loaded.
  *
  * Recording rewinds one arena bank, so it may only run once the GPU is done
- * with the frame that filled that bank — with PV3DS_ARENA_BANKS and
- * C3D_FRAME_SYNCDRAW that is two frames back. Afterwards:
+ * with the frame that filled that bank — with PV3DS_ARENA_BANKS and a
+ * C3D_FrameBegin that waits for the command queue, that is two frames back.
+ * Afterwards:
  *
  *   const PvPicaFrame *f = pv_pica_frame();   // pocketvoxel_pica.h
- *   C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+ *   while (!C3D_FrameBegin(C3D_FRAME_NONBLOCK)) { … deadline … }
  *   C3D_FrameDrawOn(target);
  *   pv_pica_viewport(&x, &y, &w, &h);         // AFTER FrameDrawOn
  *   C3D_SetViewport(x, y, w, h);

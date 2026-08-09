@@ -18,9 +18,9 @@
 //! - **Rewind is banked.** The GPU reads this memory asynchronously, so a bank
 //!   may only be rewound once the GPU is done with the frame that filled it.
 //!   [`FrameArena::rotate`] moves to the next bank each frame; with `banks >=
-//!   2` and a `C3D_FrameBegin(C3D_FRAME_SYNCDRAW)` host loop the bank being
-//!   rewound is two frames old and provably idle. `banks == 1` is legal and
-//!   means the host syncs the GPU before recording.
+//!   2` and a host loop whose `C3D_FrameBegin` waits for the GPU command queue
+//!   to drain, the bank being rewound is two frames old and provably idle.
+//!   `banks == 1` is legal and means the host syncs the GPU before recording.
 //!
 //! Sizing (the brief's "well above the GE pool's 1 MB"): the worst sampled
 //! story frame at the shipped `psp` rung is ~70k triangles (docs/VOXEL.md

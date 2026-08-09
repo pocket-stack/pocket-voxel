@@ -155,9 +155,12 @@ typedef struct {
  * physical 0x18000000, so malloc memory can never be a VBO.
  *
  * `banks` splits the arena; the crate rewinds one bank per frame, so with
- * banks >= 2 and a C3D_FrameBegin(C3D_FRAME_SYNCDRAW) loop the bank being
- * rewound is two frames old and the GPU is provably done with it. Two banks
- * of 6 MiB is what the backend was budgeted against.
+ * banks >= 2 and a host loop whose C3D_FrameBegin waits for the GPU command
+ * queue to drain, the bank being rewound is two frames old and the GPU is
+ * provably done with it. That wait is what matters, not which flag spells it:
+ * hosts/3ds polls C3D_FRAME_NONBLOCK against a deadline so a GPU that never
+ * finishes reports itself instead of hanging. Two banks of 6 MiB is what the
+ * backend was budgeted against.
  *
  * Returns 0, or -1 with pv_pica_last_error() set.
  */
