@@ -175,14 +175,19 @@ static u8 *capture_rgb;
 
 #endif /* PV3DS_CAPTURE */
 
-/* Where the memory report lands. In a capture build it belongs inside the
- * directory the driver wipes before every run; a playable build writes beside
- * its error file. */
+/*
+ * One directory for everything a run leaves on the SD card. A capture build's
+ * is the directory the e2e driver wipes before every run; a playable build
+ * writes the same three files to the same place, so a console that stopped is
+ * one directory to fetch over FTP rather than three paths to remember.
+ */
 #ifdef PV3DS_CAPTURE
-#define REPORT_PATH CAPTURE_DIR "/memory.txt"
+#define OUT_DIR CAPTURE_DIR
 #else
-#define REPORT_PATH "sdmc:/pocketvoxel-3ds-memory.txt"
+#define OUT_DIR "sdmc:/pocketvoxel-3ds"
 #endif
+#define REPORT_PATH OUT_DIR "/memory.txt"
+#define ERROR_PATH OUT_DIR "/error.txt"
 
 // ---------------------------------------------------------------------------
 // the stage breadcrumb and the heartbeat
@@ -229,14 +234,7 @@ static u8 *capture_rgb;
 #define PV3DS_HOST_HEARTBEAT_TICKS 30
 #endif
 
-/* A capture build already owns this directory; a playable build creates it
- * next to the two files it writes beside. */
-#ifdef PV3DS_CAPTURE
-#define HEARTBEAT_DIR CAPTURE_DIR
-#else
-#define HEARTBEAT_DIR "sdmc:/pocketvoxel-3ds"
-#endif
-#define HEARTBEAT_PATH HEARTBEAT_DIR "/hb.txt"
+#define HEARTBEAT_PATH OUT_DIR "/hb.txt"
 
 /* The divisor is never the literal 0 a zero cadence would otherwise make. */
 #define HEARTBEAT_TICKS (PV3DS_HOST_HEARTBEAT_TICKS > 0 ? PV3DS_HOST_HEARTBEAT_TICKS : 1)
@@ -297,7 +295,7 @@ static const char *stage_name(void) {
 }
 
 #if PV3DS_HOST_HEARTBEAT
-static bool heartbeat_ready;      /* HEARTBEAT_DIR exists and may be written */
+static bool heartbeat_ready;      /* OUT_DIR exists and may be written */
 static bool heartbeat_all_stages; /* every stage change writes, not only the cadence */
 #endif
 
@@ -307,10 +305,16 @@ static bool heartbeat_all_stages; /* every stage change writes, not only the cad
  * whatever the run's length, and leaves the LAST line — the only one a wedge
  * is asked about — at the top of the file.
  *
+ * `note` is NULL for a live heartbeat and names the expired wait for the last
+ * one a wedged run writes. Without it the two are the same line: the run that
+ * stopped on hardware left `tick 1 stage frame-begin …`, which is exactly what
+ * a run still waiting on that stage writes, so the file could not say whether
+ * the deadline had fired.
+ *
  * A failed open returns silently. The heartbeat is a diagnostic and must never
  * be the thing that stops a run.
  */
-static void heartbeat(void) {
+static void heartbeat(const char *note) {
 #if PV3DS_HOST_HEARTBEAT
   if (!heartbeat_ready) return;
   PvVox3dsStats scene;
@@ -319,15 +323,19 @@ static void heartbeat(void) {
   if (file == NULL) return;
   fprintf(
     file,
-    "tick %lu stage %s scene %lu items %lu rung %lu %s\n",
+    "tick %lu stage %s scene %lu items %lu rung %lu %s%s%s\n",
     (unsigned long)voxel_host_tick,
     stage_name(),
     (unsigned long)scene.scene_tick,
     (unsigned long)scene.draw_items,
     (unsigned long)scene.quality_tier,
-    voxel_gfx_stats_line()
+    voxel_gfx_stats_line(),
+    note == NULL ? "" : " WEDGED ",
+    note == NULL ? "" : note
   );
   fclose(file);
+#else
+  (void)note;
 #endif
 }
 
@@ -338,7 +346,7 @@ static void heartbeat(void) {
 static void stage_enter(HostStage next) {
   voxel_host_stage = (uint8_t)next;
 #if PV3DS_HOST_HEARTBEAT
-  if (heartbeat_all_stages) heartbeat();
+  if (heartbeat_all_stages) heartbeat(NULL);
 #endif
 }
 
@@ -368,22 +376,29 @@ static void stage_enter(HostStage next) {
  * heap_used is newlib's own accounting (mallinfo().uordblks), which is what
  * says how large the malloc heap has to BE — the pak is 30.6 MiB of it and
  * QuickJS's parse of the pak's GAME section is most of the rest.
+ *
+ * runflags and apt say which APT environment the launcher put this process in,
+ * and the frame's deadlines used to depend on the answer (see the two waits
+ * below). RUNFLAG_APTWORKAROUND (bit 0) without RUNFLAG_APTREINIT (bit 1) is
+ * the one where libctru's aptInit returns before it ever sets FLAG_ACTIVE, so
+ * apt=0 for the whole run.
  */
 static void report_memory(const char *stage, uint32_t arena_bytes) {
   static bool started = false;
   struct mallinfo heap = mallinfo();
-#ifdef PV3DS_CAPTURE
-  mkdir(CAPTURE_DIR, 0777);
-#endif
+  mkdir(OUT_DIR, 0777);
   FILE *file = fopen(REPORT_PATH, started ? "ab" : "wb");
   if (file == NULL) return;
   started = true;
   fprintf(
     file,
-    "%s homebrew=%d memtype=%lu heap=%lu heap_used=%lu linear=%lu linear_free=%lu "
+    "%s homebrew=%d runflags=0x%lx apt=%d memtype=%lu heap=%lu heap_used=%lu "
+    "linear=%lu linear_free=%lu "
     "app_size=%lu app_used=%lu system_size=%lu base_size=%lu arena=%lu\n",
     stage,
     envIsHomebrew() ? 1 : 0,
+    (unsigned long)envGetSystemRunFlags(),
+    aptIsActive() ? 1 : 0,
     (unsigned long)osGetApplicationMemType(),
     (unsigned long)envGetHeapSize(),
     (unsigned long)heap.uordblks,
@@ -402,11 +417,9 @@ static void report_memory(const char *stage, uint32_t arena_bytes) {
  * park: Azahar does not stop when the app returns from main. */
 static void fail(const char *message) {
   const char *text = (message == NULL || message[0] == '\0') ? "unknown failure" : message;
-#ifdef PV3DS_CAPTURE
-  mkdir(CAPTURE_DIR, 0777);
-  FILE *file = fopen(CAPTURE_DIR "/error.txt", "wb");
-#else
-  FILE *file = fopen("sdmc:/pocketvoxel-3ds-error.txt", "wb");
+  mkdir(OUT_DIR, 0777);
+  FILE *file = fopen(ERROR_PATH, "wb");
+#ifndef PV3DS_CAPTURE
   printf("\x1b[31mFAILED\x1b[0m\n%s\n", text);
 #endif
   if (file != NULL) {
@@ -454,41 +467,147 @@ static void fail(const char *message) {
  * so a merely slow frame cannot reach it. It is measured in SYSTEM ticks, not
  * wall time, so an emulator that takes wall-clock seconds over one frame does
  * not approach it either. Zero expires immediately, which is the wedge drill.
+ *
+ * ---------------------------------------------------------------------------
+ * What the deadline counts, and why counting wall time did not fire
+ * ---------------------------------------------------------------------------
+ *
+ * MEASURED on a New 3DS LL. The console stopped and the last line of
+ * sdmc:/pocketvoxel-3ds/hb.txt was
+ *
+ *   tick 1 stage frame-begin scene 2 items 10 rung 0 draws 9 verts 7336
+ *   idx 11004 tex 2/80 KiB arena 136/136 KiB drop a0 t0 w0
+ *
+ * frame-begin at tick 1 is the queue wait, so frame 0 had been submitted and
+ * the GPU never finished it. That frame was 9 draws with nothing dropped, and
+ * the same run reported 92020 KiB of heap and 17881 KiB of linear memory free,
+ * so neither the arena nor the heap is involved. NO ERROR FILE WAS WRITTEN:
+ * the four-second deadline never expired, on a console that never ran another
+ * frame. Every wedge drill on Azahar expired correctly. Hardware only.
+ *
+ * The deadline did not expire because the first version restarted it whenever
+ * aptIsActive() read false, and that read is not the suspension test it looks
+ * like. Two facts from libctru's source/services/apt.c:
+ *
+ *   FLAG_ACTIVE, the bit aptIsActive() returns, is written by exactly four
+ *   functions — aptWaitForWakeUp, aptJumpToHomeMenu, aptLaunchLibraryApplet,
+ *   aptLaunchSystemApplet — and every one of them runs on the thread that
+ *   calls aptMainLoop(). The APT event-handler thread only sets
+ *   FLAG_SHOULDSLEEP and the home-button state; it never touches FLAG_ACTIVE.
+ *   So the bit cannot change while THIS thread sits in a wait between two
+ *   aptMainLoop() calls, and a suspension cannot begin inside one of these
+ *   waits: HOME and sleep both take effect in aptHandleJumpToHome and
+ *   aptHandleSleep at the top of the frame loop, which is behind the wait. The
+ *   check forgave nothing it was written to forgive.
+ *
+ *   The bit can also be false for a whole run. aptInit() returns early — before
+ *   the aptWaitForWakeUp(TR_ENABLE) that first sets FLAG_ACTIVE — when
+ *   aptIsCrippled(), which is RUNFLAG_APTWORKAROUND set and RUNFLAG_APTREINIT
+ *   clear, the APT workaround some homebrew environments run titles under.
+ *   There aptFlags stays 0 and aptIsActive() answers false from boot to exit.
+ *   Under that launcher the restart ran on every poll and both deadlines were
+ *   infinite. Azahar's loader does not set that run flag, which is exactly why
+ *   the drills expired on the emulator and the console still hung. The boot
+ *   line of memory.txt now prints runflags and apt, so which environment a
+ *   console was in is a fact the next run leaves behind.
+ *
+ * So the deadline stops asking APT anything and measures the thing it actually
+ * needs: was THIS THREAD running while the GPU was not? A wedged GPU does not
+ * stop this thread — it keeps polling every PV3DS_HOST_POLL_GAP_MS, and every
+ * gap between two polls is short. A process that is suspended, asleep, behind
+ * an applet or frozen by the kernel does not execute this loop at all, so
+ * however long that lasts it arrives as ONE long gap between two consecutive
+ * polls. Each gap is therefore credited by its own length:
+ *
+ *   gap <= PV3DS_HOST_WAIT_STALL_MS   this thread ran     -> counts against
+ *                                                            the deadline
+ *   gap >  PV3DS_HOST_WAIT_STALL_MS   it did not run      -> counted apart,
+ *                                                            never against it
+ *
+ * and the wait expires once the credited total reaches the deadline. The total
+ * only ever grows, so every wait ends after a bounded amount of running time
+ * whatever APT reports — which is what the console needed. A suspension still
+ * costs the wait nothing, whatever its length, and that now covers the case
+ * the APT bit never could: a freeze the process is never told about.
+ *
+ * PV3DS_HOST_WAIT_STALL_MS is 250 by default: 250x the poll gap, so a
+ * scheduling hiccup is still counted as running, and far below any real
+ * suspension, the shortest of which is a HOME transition of about a second.
+ * A suspension shorter than the threshold is simply counted as running and
+ * costs at most 250 ms of a 4000 ms deadline.
+ *
+ * The two are related and must stay that way: a poll gap at or above the stall
+ * threshold makes every gap look like a suspension and no wait can ever
+ * expire. Setting --poll-gap-ms above --wait-stall-ms on purpose is how the
+ * suspended-run drill is staged, and the only reason to do it.
  */
 #ifndef PV3DS_HOST_FRAME_WAIT_MS
 #define PV3DS_HOST_FRAME_WAIT_MS 4000
 #endif
+#ifndef PV3DS_HOST_POLL_GAP_MS
+#define PV3DS_HOST_POLL_GAP_MS 1
+#endif
+#ifndef PV3DS_HOST_WAIT_STALL_MS
+#define PV3DS_HOST_WAIT_STALL_MS 250
+#endif
 
-#define FRAME_WAIT_TICKS \
-  ((u64)PV3DS_HOST_FRAME_WAIT_MS * (u64)(SYSCLOCK_ARM11 / 1000u))
+#define WAIT_TICKS_PER_MS ((u64)(SYSCLOCK_ARM11 / 1000u))
+#define FRAME_WAIT_TICKS ((u64)PV3DS_HOST_FRAME_WAIT_MS * WAIT_TICKS_PER_MS)
+#define WAIT_STALL_TICKS ((u64)PV3DS_HOST_WAIT_STALL_MS * WAIT_TICKS_PER_MS)
+#define WAIT_MS(ticks) ((unsigned long)((ticks) / WAIT_TICKS_PER_MS))
 
-static bool wait_expired(u64 start) {
-  return (svcGetSystemTick() - start) >= FRAME_WAIT_TICKS;
+typedef struct {
+  u64 last;    /* the tick the previous poll read */
+  u64 ran;     /* ticks in gaps short enough to be this thread running */
+  u64 stalled; /* ticks in gaps too long to be this thread running */
+  u32 stalls;  /* how many of those there were */
+} WaitBound;
+
+/* The wait in progress. There is only ever one: both waits run on the main
+ * thread inside one frame, and wedge() reports whichever of them was last
+ * entered. */
+static WaitBound wait_bound;
+
+static void wait_begin(void) {
+  wait_bound.last = svcGetSystemTick();
+  wait_bound.ran = 0;
+  wait_bound.stalled = 0;
+  wait_bound.stalls = 0;
+}
+
+/* Credit the time since the previous poll, then answer whether the wait is
+ * past its deadline. Called once per poll, before the sleep. */
+static bool wait_expired(void) {
+  u64 now = svcGetSystemTick();
+  u64 gap = now - wait_bound.last;
+  wait_bound.last = now;
+  if (gap > WAIT_STALL_TICKS) {
+    wait_bound.stalled += gap;
+    wait_bound.stalls += 1;
+  } else {
+    wait_bound.ran += gap;
+  }
+  return wait_bound.ran >= FRAME_WAIT_TICKS;
 }
 
 /* Sleep on the kernel timer between polls, never on a GPU event: a bounded
  * wait must not depend on the subsystem it is bounding. One millisecond
  * against a 16.7 ms vblank is ~17 polls a frame. */
 static void poll_gap(void) {
-  svcSleepThread(1000000ll);
+  svcSleepThread((s64)PV3DS_HOST_POLL_GAP_MS * 1000000ll);
 }
 
 /*
  * C3D_FrameSync's own condition — both vblank counters advanced — polled
  * against the deadline. `rounds` is how many vblank rounds to wait for.
- *
- * A suspended run stops receiving vblank events on purpose (the HOME menu,
- * sleep), so the deadline restarts while aptIsActive() is false: a suspension
- * belongs to aptMainLoop at the top of the frame loop, not to this wait.
  */
 static bool vblank_settle(u32 rounds) {
   for (u32 round = 0; round < rounds; round += 1) {
     u32 top = C3D_FrameCounter(0);
     u32 bottom = C3D_FrameCounter(1);
-    u64 start = svcGetSystemTick();
+    wait_begin();
     while (C3D_FrameCounter(0) == top || C3D_FrameCounter(1) == bottom) {
-      if (!aptIsActive()) start = svcGetSystemTick();
-      else if (wait_expired(start)) return false;
+      if (wait_expired()) return false;
       poll_gap();
     }
   }
@@ -502,34 +621,47 @@ static bool vblank_settle(u32 rounds) {
  * arena bank the next record rewinds is still provably free.
  */
 static bool frame_begin_bounded(void) {
-  u64 start = svcGetSystemTick();
+  wait_begin();
   while (!C3D_FrameBegin(C3D_FRAME_NONBLOCK)) {
-    if (!aptIsActive()) start = svcGetSystemTick();
-    else if (wait_expired(start)) return false;
+    if (wait_expired()) return false;
     poll_gap();
   }
   return true;
 }
 
-/* A deadline expired. Name what was being waited for, the stage, the tick and
- * the counters, in the error file and in the heartbeat, then park. */
+/*
+ * A deadline expired. Name what was being waited for, how the wait's time
+ * divided, the APT state that used to gate all of this, and the stage, tick
+ * and counters, in the error file and in the heartbeat, then park.
+ *
+ * The split is the evidence: "ran 4000 ms in 0 stalls" is a thread that was
+ * running the whole time while the GPU was not, which is a wedge. Stalled
+ * milliseconds are time the process was not executing and are reported so a
+ * reader can see they were not charged to the GPU.
+ */
 static void wedge(const char *waiting_for) {
   PvVox3dsStats scene;
   pv3ds_stats(&scene);
-  char message[288];
+  char message[448];
   snprintf(
     message,
     sizeof message,
-    "%s within %lu ms: stage %s, tick %lu, scene tick %lu, items %lu, %s",
+    "%s within %lu ms of this thread running (ran %lu ms, stalled %lu ms in %lu gaps, "
+    "apt %d, runflags 0x%lx): stage %s, tick %lu, scene tick %lu, items %lu, %s",
     waiting_for,
     (unsigned long)PV3DS_HOST_FRAME_WAIT_MS,
+    WAIT_MS(wait_bound.ran),
+    WAIT_MS(wait_bound.stalled),
+    (unsigned long)wait_bound.stalls,
+    aptIsActive() ? 1 : 0,
+    (unsigned long)envGetSystemRunFlags(),
     stage_name(),
     (unsigned long)voxel_host_tick,
     (unsigned long)scene.scene_tick,
     (unsigned long)scene.draw_items,
     voxel_gfx_stats_line()
   );
-  heartbeat();
+  heartbeat(waiting_for);
   fail(message);
 }
 
@@ -898,7 +1030,7 @@ int main(void) {
   /* One directory for what a run leaves on the SD. mkdir before the first
    * write, so an hb.txt that never appears means the card itself is
    * unwritable rather than that the run never reached a frame. */
-  mkdir(HEARTBEAT_DIR, 0777);
+  mkdir(OUT_DIR, 0777);
   heartbeat_ready = true;
 #endif
 
@@ -917,7 +1049,7 @@ int main(void) {
   stage_enter(STAGE_APT);
   while (aptMainLoop()) {
     voxel_host_tick = tick;
-    if (HEARTBEAT_ON_TICK(tick)) heartbeat();
+    if (HEARTBEAT_ON_TICK(tick)) heartbeat(NULL);
     stage_enter(STAGE_INPUT);
     hidScanInput();
 #ifdef PV3DS_CAPTURE

@@ -38,8 +38,18 @@
 #
 # The diagnosability knobs, the same way:
 #
-#   PV3DS_HOST_FRAME_WAIT_MS    deadline on each of the frame's two GPU waits;
-#                               0 expires at once, which is the wedge drill
+#   PV3DS_HOST_FRAME_WAIT_MS    deadline on each of the frame's two GPU waits,
+#                               counted in time this thread was running rather
+#                               than wall time; 0 expires at once, which is the
+#                               wedge drill
+#   PV3DS_HOST_POLL_GAP_MS      how long each wait sleeps between polls
+#   PV3DS_HOST_WAIT_STALL_MS    a poll-to-poll gap longer than this is time the
+#                               process was not executing (suspended, asleep,
+#                               behind an applet) and is never charged to the
+#                               deadline. It must stay well above the poll gap:
+#                               a poll gap above it forgives everything and no
+#                               wait can expire, which is the suspended-run
+#                               drill and nothing else
 #   PV3DS_HOST_HEARTBEAT        1 writes sdmc:/pocketvoxel-3ds/hb.txt, 0 does
 #                               not (the capture build's default, so the golden
 #                               path keeps the writes it was recorded with)
@@ -95,6 +105,8 @@ CFLAGS := -Wall -Wextra -O2 -g -std=gnu11 -mword-relocations -ffunction-sections
   -DPV3DS_HOST_HEAP_MIB=$(PV3DS_HOST_HEAP_MIB) \
   -DPV3DS_HOST_LINEAR_MIB=$(PV3DS_HOST_LINEAR_MIB) \
   -DPV3DS_HOST_FRAME_WAIT_MS=$(PV3DS_HOST_FRAME_WAIT_MS) \
+  -DPV3DS_HOST_POLL_GAP_MS=$(PV3DS_HOST_POLL_GAP_MS) \
+  -DPV3DS_HOST_WAIT_STALL_MS=$(PV3DS_HOST_WAIT_STALL_MS) \
   -DPV3DS_HOST_HEARTBEAT=$(PV3DS_HOST_HEARTBEAT) \
   -DPV3DS_HOST_HEARTBEAT_TICKS=$(PV3DS_HOST_HEARTBEAT_TICKS) \
   -I$(PV3DS_APP_INCLUDE) -I$(PV3DS_PICA_INCLUDE) -I$(BUILD) \

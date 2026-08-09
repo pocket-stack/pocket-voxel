@@ -105,6 +105,8 @@ cannot collide with the crate's own contract values:
 | `--texture-mib` | 14 | linear memory held back for the expanded textures |
 | `--heap-mib` / `--linear-mib` | 0 | libctru's split; zero is its automatic one |
 | `--frame-wait-ms` | 4000 | deadline on each of the frame's two GPU waits |
+| `--poll-gap-ms` | 1 | how long those waits sleep between polls |
+| `--wait-stall-ms` | 250 | a longer poll-to-poll gap is time the process was not running, and is never charged to the deadline |
 | `--heartbeat` | 1, and 0 for `--capture` | write `sdmc:/pocketvoxel-3ds/hb.txt` |
 | `--heartbeat-ticks` | 30 | the heartbeat's tick cadence |
 
@@ -125,7 +127,10 @@ A wedged run is not an erroring run: `fail()` never happens, so nothing is
 written, the top screen keeps its last frame, `aptMainLoop` is never reached
 again so HOME stops responding, and the bottom screen's counter line only
 refreshes every 30 ticks. A run that stops inside the first 30 therefore used to
-say nothing at all about where it stopped. Three things now make it talk.
+say nothing at all about where it stopped. Three things now make it talk, and
+everything a run leaves lands in one directory — `sdmc:/pocketvoxel-3ds/`, with
+`hb.txt`, `error.txt` and `memory.txt` in it — so a console that stopped is one
+directory to fetch.
 
 **Every step of the frame names itself** in `voxel_host_stage` before it runs —
 `guest-frame`, `tick`, `record`, `gfx-prepare`, `frame-sync`, `frame-begin`,
@@ -160,16 +165,50 @@ an error naming the stage, the tick and the counters, then parks exactly as
 `fail()` does:
 
 ```
-the GPU never finished the previous frame within 1000 ms: stage frame-begin, tick 0, …
+the GPU never finished the previous frame within 1000 ms of this thread running
+(ran 1000 ms, stalled 0 ms in 0 gaps, apt 1, runflags 0x0): stage frame-begin,
+tick 1, …
 ```
 
 The deadline is four seconds by default — about 240 frames — and it is measured
 in **system ticks** (`svcGetSystemTick`, `SYSCLOCK_ARM11`), not wall time, so
 neither a heavy frame nor a slow emulator approaches it. A run at 20 ms, 200x
-tighter, still completed 1334 ticks under Azahar without tripping. The deadline
-also restarts while `aptIsActive()` is false, so the HOME menu and sleep — which
-stop this process's vblank events on purpose — cannot be mistaken for a wedge.
+tighter, still completed 1334 ticks under Azahar without tripping.
 `--frame-wait-ms 0` expires at once, which is the drill.
+
+**What the deadline counts is time this thread was running**, not wall time
+since the wait began. A New 3DS LL wedged with the first version of it and wrote
+no error file at all: the last heartbeat line was `tick 1 stage frame-begin
+scene 2 items 10 rung 0 draws 9 verts 7336 idx 11004 …`, so frame 0 had been
+submitted and the GPU never finished it, and the four-second deadline never
+expired. It never expired because it restarted whenever `aptIsActive()` read
+false, and libctru's `apt.c` says that bit answers a different question:
+`FLAG_ACTIVE` is written only by `aptWaitForWakeUp`, `aptJumpToHomeMenu`,
+`aptLaunchLibraryApplet` and `aptLaunchSystemApplet`, all on the thread that
+calls `aptMainLoop()`, so it cannot change while that thread sits in one of
+these waits — and it stays **false for a whole run** under an environment where
+`aptIsCrippled()` holds (`RUNFLAG_APTWORKAROUND` set, `RUNFLAG_APTREINIT`
+clear), because `aptInit` then returns before the wakeup that first sets it.
+Azahar's loader reports `runflags=0x0 apt=1`, which is why every drill expired
+on the emulator while the console hung.
+
+So the wait credits the gap between two of its own polls instead. A gap at or
+under `--wait-stall-ms` is this thread running and counts against the deadline;
+a longer one is the process not executing at all — a HOME press, sleep, an
+applet, a kernel freeze — and is counted separately and never charged. The
+credited total only grows, so every wait ends after a bounded amount of running
+time whatever APT reports, while a suspension of any length still costs the wait
+nothing. `aptIsActive()` and the run flags are now reported (in the error line
+and in `memory.txt`'s boot line) rather than waited on.
+
+Both halves are drilled on Azahar with a build whose queue never drains after
+frame 0, which reproduces the console's exact heartbeat line. At
+`--poll-gap-ms 100`, under the 250 ms stall threshold, the run writes its error
+after `ran 1000 ms, stalled 0 ms in 0 gaps`. At `--poll-gap-ms 400`, over it,
+every gap reads as time the thread was not running and 150 s produced no error
+file — the suspension shape, forgiven. Injecting a single 6 s absence into the
+wait gives `ran 1000 ms, stalled 6000 ms in 1 gaps`: the absence excluded, the
+wedge still caught.
 
 ## Acceptance
 

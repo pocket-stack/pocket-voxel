@@ -8,6 +8,10 @@
 //                                              expires at once, so the run
 //                                              writes its error file instead
 //                                              of stopping on a black screen
+//   bun tools/voxel-3ds.ts --poll-gap-ms 400   the suspended-run drill: every
+//                                              poll gap reads as time the
+//                                              process was not executing, so
+//                                              no wait ever charges the GPU
 //
 // The toolchain spans two environments, exactly as the PocketJS 3DS host's
 // does. The Rust half compiles on macOS: armv6k-nintendo-3ds is a built-in
@@ -161,6 +165,10 @@ export interface VoxelThreeDsArguments {
   readonly linearMib: number;
   /** Deadline on each of the frame's two GPU waits; 0 is the wedge drill. */
   readonly frameWaitMs: number;
+  /** How long each of those waits sleeps between polls. */
+  readonly pollGapMs: number;
+  /** A poll-to-poll gap longer than this is time the process was not running. */
+  readonly waitStallMs: number;
   /** 1 writes sdmc:/pocketvoxel-3ds/hb.txt, 0 does not. */
   readonly heartbeat: number;
   readonly heartbeatTicks: number;
@@ -171,8 +179,8 @@ export interface VoxelThreeDsArguments {
 const USAGE =
   "usage: bun tools/voxel-3ds.ts [--capture] [--cia] [--trace <path>] [--skip-bundle] " +
   "[--package-outdir <dir>] [--arena-mib N] [--banks N] [--texture-mib N] " +
-  "[--heap-mib N] [--linear-mib N] [--frame-wait-ms N] [--heartbeat 0|1] " +
-  "[--heartbeat-ticks N] [cargo args…]";
+  "[--heap-mib N] [--linear-mib N] [--frame-wait-ms N] [--poll-gap-ms N] " +
+  "[--wait-stall-ms N] [--heartbeat 0|1] [--heartbeat-ticks N] [cargo args…]";
 
 function numberFlag(
   argv: readonly string[],
@@ -209,6 +217,8 @@ export function parseVoxelThreeDsArguments(
     "heap-mib",
     "linear-mib",
     "frame-wait-ms",
+    "poll-gap-ms",
+    "wait-stall-ms",
     "heartbeat",
     "heartbeat-ticks",
   ]);
@@ -250,6 +260,28 @@ export function parseVoxelThreeDsArguments(
       argv,
       "frame-wait-ms",
       Number(process.env.PV3DS_HOST_FRAME_WAIT_MS ?? 4000),
+    ),
+    // The deadline counts time this thread was RUNNING, not wall time: each
+    // wait credits the gap between two of its own polls, and a gap longer than
+    // the stall threshold is time the process was not executing at all (a HOME
+    // press, sleep, an applet, a kernel freeze) and is never charged to the
+    // GPU. hosts/3ds/src/main.c says why the aptIsActive() test this replaced
+    // could not fire on hardware.
+    //
+    // 250 is 250x the poll gap, so a scheduling hiccup still counts as
+    // running, and far under any real suspension. The pair is also the
+    // suspended-run drill: --poll-gap-ms ABOVE --wait-stall-ms makes every gap
+    // read as time the thread was not running, so nothing is ever charged and
+    // no wait expires; below it, the same wedge is caught on schedule.
+    pollGapMs: numberFlag(
+      argv,
+      "poll-gap-ms",
+      Number(process.env.PV3DS_HOST_POLL_GAP_MS ?? 1),
+    ),
+    waitStallMs: numberFlag(
+      argv,
+      "wait-stall-ms",
+      Number(process.env.PV3DS_HOST_WAIT_STALL_MS ?? 250),
     ),
     // The heartbeat is a hardware diagnostic: it costs one SD write per stage
     // change, so a run with it on does not hold 60 Hz. A capture build leaves
@@ -827,6 +859,8 @@ export async function buildVoxel3ds(argv: readonly string[]): Promise<string> {
     PV3DS_HOST_HEAP_MIB: String(args.heapMib),
     PV3DS_HOST_LINEAR_MIB: String(args.linearMib),
     PV3DS_HOST_FRAME_WAIT_MS: String(args.frameWaitMs),
+    PV3DS_HOST_POLL_GAP_MS: String(args.pollGapMs),
+    PV3DS_HOST_WAIT_STALL_MS: String(args.waitStallMs),
     PV3DS_HOST_HEARTBEAT: String(args.heartbeat),
     PV3DS_HOST_HEARTBEAT_TICKS: String(args.heartbeatTicks),
     PV3DS_CAPTURE: args.capture ? "1" : "",

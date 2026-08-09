@@ -831,16 +831,41 @@ walked against the corrected capture.
     responding because `aptMainLoop` is never reached again, and no error file
     appears — the run is blocked, not failing, so `fail()` never happens.
 
-    Two files name it. `sdmc:/pocketvoxel-3ds/hb.txt` carries the last tick, the
-    stage and the frame's counters, rewritten on every stage change past the
-    first frame. If a deadline expires, the error file carries the same facts
-    plus which wait it was: `frame-sync` is the vblank counters (this process
-    has stopped receiving GSP events), `frame-begin` is the command queue (the
-    GPU never finished the previous frame). A halted console can be read
-    directly instead: `p voxel_host_stage`, `p voxel_host_tick`.
+    Two files name it, both in `sdmc:/pocketvoxel-3ds/`. `hb.txt` carries the
+    last tick, the stage and the frame's counters, rewritten on every stage
+    change past the first frame, and says `WEDGED` plus the wait's name on the
+    last line a wedged run writes. If a deadline expires, `error.txt` carries
+    the same facts plus which wait it was: `frame-sync` is the vblank counters
+    (this process has stopped receiving GSP events), `frame-begin` is the
+    command queue (the GPU never finished the previous frame). A halted console
+    can be read directly instead: `p voxel_host_stage`, `p voxel_host_tick`.
 
     An hb.txt that never appears at all is its own finding — the card is
     unwritable, since the file is created before the first frame runs.
+
+35. **The deadline counts running time, not wall time.** MEASURED on a New 3DS
+    LL: the console stopped at `tick 1 stage frame-begin scene 2 items 10 rung 0
+    draws 9 verts 7336 idx 11004 tex 2/80 KiB arena 136/136 KiB drop a0 t0 w0`,
+    with 92020 KiB of heap and 17881 KiB of linear memory free and nothing
+    dropped — so frame 0 was submitted and the PICA200 never finished it — and
+    **no error file was written**. The four-second deadline never fired, because
+    its first version restarted whenever `aptIsActive()` read false, and that
+    bit is not a suspension test: libctru writes `FLAG_ACTIVE` only on the
+    thread that calls `aptMainLoop()`, so it cannot change inside one of these
+    waits, and it stays false for an entire run under `aptIsCrippled()`
+    (`RUNFLAG_APTWORKAROUND` without `RUNFLAG_APTREINIT`), where `aptInit`
+    returns before the wakeup that first sets it. Azahar reports `runflags=0x0
+    apt=1`, so every wedge drill expired on the emulator while the console hung.
+
+    Each wait now credits the gap between two of its own polls: a gap at or
+    under `PV3DS_HOST_WAIT_STALL_MS` (250 by default, 250x the poll gap) is this
+    thread running and counts against the deadline; a longer one is the process
+    not executing — suspended, asleep, behind an applet, frozen — and is never
+    charged. The credited total only grows, so every wait ends after bounded
+    running time whatever APT reports, and a suspension of any length costs the
+    wait nothing. `error.txt` reports the split (`ran 1000 ms, stalled 6000 ms
+    in 1 gaps`) along with `apt` and `runflags`, so the environment a console
+    was in is a fact the next run leaves behind.
 
 ---
 
