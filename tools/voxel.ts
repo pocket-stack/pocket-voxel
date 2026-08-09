@@ -9,8 +9,9 @@
 // (voxelmon/SCHEMA.md); anything missing prints a reason and exits
 // without failing into a half-decoded state.
 
-import { existsSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 
+import { packageVitaVpk } from "../vendor/pocketjs/tools/vita-package.ts";
 import { missingInputReason, resolveEnv } from "../voxelmon/import/env.ts";
 import { runImport } from "../voxelmon/import/index.ts";
 import { runParity } from "../voxelmon/import/parity.ts";
@@ -36,9 +37,13 @@ commands:
   psp       gen+cook+trace + bundle game.js + cargo psp -> EBOOT.PBP
             (extra args pass to cargo psp, e.g. --release, --features capture)
   run       psp, then launch the EBOOT in PPSSPP
+  vita      gen+cook+trace + bundle game.js + cargo vita -> a VPK carrying
+            the pak (extra args pass to cargo vita, e.g. --release);
+            --tier <psp|vita|desktop> names the quality rung the build asks
+            the core for (default vita)
 
 env: VOXELMON_ROM (canonical US Red), VOXELMON_G1R (~/code/gen1recomp),
-     VOXELMON_VOXELMOD (~/code/DramaticShapeVoxelMod)`;
+     VOXELMON_VOXELMOD (~/code/DramaticShapeVoxelMod), VITASDK`;
 
 const ROOT = new URL("..", import.meta.url).pathname;
 /** Both tapes' tested seed — their routes are plotted against it. */
@@ -274,6 +279,114 @@ async function buildEboot(cargoArgs: string[]): Promise<number> {
   return 0;
 }
 
+const VPK_DIR = "crates/pocketvoxel-vita";
+
+/**
+ * Build the VPK. Unlike the PSP path there is no MEMSIZE repack and no
+ * separate pak deployment: the pak rides INSIDE the VPK (`app0:` at
+ * runtime), so installing the one file in VitaShell is the whole install.
+ *
+ * The pinned nightly comes from the vendored Vita host's own
+ * `rust-toolchain.toml` — one source for the toolchain both this VPK and
+ * PocketJS's build against, so they cannot drift into two nightlies.
+ */
+async function buildVpk(cargoArgs: string[], tier: string): Promise<number> {
+  const home = process.env.HOME ?? "";
+  const vitasdk = process.env.VITASDK || `${home}/vitasdk`;
+  if (!existsSync(`${vitasdk}/bin/arm-vita-eabi-gcc`)) {
+    console.error(`voxel vita: incomplete VitaSDK at ${vitasdk} (set VITASDK)`);
+    return 1;
+  }
+  if (!existsSync(`${vitasdk}/arm-vita-eabi/lib/libvitaGL.a`)) {
+    console.error(
+      `voxel vita: libvitaGL.a missing from ${vitasdk} — run: vdpm vitaGL`,
+    );
+    return 1;
+  }
+  const rustup = Bun.which("rustup") ?? `${home}/.cargo/bin/rustup`;
+  if (!existsSync(rustup)) {
+    console.error("voxel vita: rustup not found (expected ~/.cargo/bin/rustup)");
+    return 1;
+  }
+  const toolchainFile = `${ROOT}vendor/pocketjs/hosts/vita/rust-toolchain.toml`;
+  const channel = readFileSync(toolchainFile, "utf8").match(
+    /channel\s*=\s*"([^"]+)"/,
+  )?.[1];
+  if (!channel) {
+    console.error(`voxel vita: no toolchain channel in ${toolchainFile}`);
+    return 1;
+  }
+
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    // cargo-vita probes `rustc` from PATH even when cargo itself was launched
+    // through `rustup run`; keep the shim ahead of any Homebrew stable Rust,
+    // and expose the VitaSDK tools without requiring shell dotfiles.
+    PATH: `${vitasdk}/bin:${home}/.cargo/bin:${process.env.PATH ?? ""}`,
+    VITASDK: vitasdk,
+    TARGET_CC: "arm-vita-eabi-gcc",
+    CC_armv7_sony_vita_newlibeabihf: "arm-vita-eabi-gcc",
+    TARGET_CXX: "arm-vita-eabi-g++",
+    CXX_armv7_sony_vita_newlibeabihf: "arm-vita-eabi-g++",
+    TARGET_AR: "arm-vita-eabi-ar",
+    AR_armv7_sony_vita_newlibeabihf: "arm-vita-eabi-ar",
+    // The bundled guest and the rung, baked by pocketvoxel-vita/build.rs.
+    VOXELMON_JS: `${ROOT}${GAME_JS}`,
+    VOXELMON_TIER: tier,
+  };
+
+  console.log(`voxel vita: cargo vita build vpk (tier=${tier})`);
+  const rc = await run(
+    [rustup, "run", channel, "cargo", "vita", "build", "vpk", ...cargoArgs],
+    `${ROOT}${VPK_DIR}`,
+    env,
+  );
+  if (rc !== 0) return rc;
+
+  const profile = cargoArgs.includes("--release") || cargoArgs.includes("-r")
+    ? "release"
+    : "debug";
+  const outDir = `${ROOT}${VPK_DIR}/target/armv7-sony-vita-newlibeabihf/${profile}`;
+  const eboot = `${outDir}/pocketvoxel-vita.self`;
+  const sfo = `${outDir}/pocketvoxel-vita.sfo`;
+  if (!existsSync(eboot) || !existsSync(sfo)) {
+    console.error(`voxel vita: no .self/.sfo under ${outDir}`);
+    return 1;
+  }
+
+  // The pak is a VPK asset, not an embedded array: `packageVitaVpk` overlays
+  // an application tree onto the framework's LiveArea defaults, so staging
+  // is one hard link (a 32 MB copy per build would dominate the build).
+  const staged = `${ROOT}dist/voxelmon/vita-assets`;
+  rmSync(staged, { recursive: true, force: true });
+  mkdirSync(staged, { recursive: true });
+  const pakSource = `${ROOT}${PAK}`;
+  if (!existsSync(pakSource)) {
+    console.error(`voxel vita: no pak at ${pakSource}`);
+    return 1;
+  }
+  try {
+    linkSync(pakSource, `${staged}/voxelmon.vxpak`);
+  } catch {
+    await Bun.write(`${staged}/voxelmon.vxpak`, Bun.file(pakSource));
+  }
+
+  const vpk = `${ROOT}dist/voxelmon/voxelmon.vpk`;
+  await packageVitaVpk({
+    tool: `${vitasdk}/bin/vita-pack-vpk`,
+    sfo,
+    eboot,
+    output: vpk,
+    applicationAssets: staged,
+  });
+  console.log(`voxel vita: ${vpk}`);
+  console.log(
+    "voxel vita: copy it to the Vita over VitaShell (SELECT starts USB/FTP), " +
+      "press X on the file, confirm the install prompt.",
+  );
+  return 0;
+}
+
 /**
  * A PARAM.SFO: the exact layout cargo-psp's mksfo writes (20-byte header,
  * 16-byte index entries, key blob, 4-aligned value blob), keys pre-sorted
@@ -384,6 +497,17 @@ async function main(): Promise<number> {
       return await launchPpsspp(cargoArgs.includes("--release") ? "release" : "debug");
     }
     return 0;
+  }
+  if (command === "vita") {
+    const tier = arg("tier") ?? "vita";
+    const cargoArgs = process.argv
+      .slice(3)
+      .filter((a, i, all) => a !== "--tier" && all[i - 1] !== "--tier");
+    const prep = await preparePakAndTrace();
+    if (prep !== 0) return prep;
+    const bundle = await bundleGuest();
+    if (bundle !== 0) return bundle;
+    return await buildVpk(cargoArgs, tier);
   }
   if (command === "wav") {
     return await run(["bun", "voxelmon/game/audio/wav.ts", ...process.argv.slice(3)]);

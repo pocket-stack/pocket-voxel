@@ -1,0 +1,76 @@
+# pocketvoxel-vita — the Pocket Voxel VPK: QuickJS gameplay guest + voxel
+# surface + vitaGL diorama backend (docs/VOXEL.md §2, §8).
+#
+# STANDALONE LONE-BIN CRATE, like pocketvoxel-psp: it only builds for
+# armv7-sony-vita-newlibeabihf through cargo-vita, so it is excluded from the
+# desktop workspace in the root Cargo.toml. Build with
+# `bun tools/voxel.ts vita --release`, which resolves VitaSDK + the pinned
+# nightly and bakes the game bundle (VOXELMON_JS).
+#
+# The composition, in docs/RUNTIMES.md terms:
+#   pocketvoxel-core the presentation core (scene, cameras, draw list)
+# + pocketvoxel-gxm  the raw-GXM backend for that draw list
+# + this crate       the `voxel` surface registration, pak file loading, the
+#                    PCM ring, and the frame loop
+#
+# Unlike the PSP EBOOT there is no host library underneath: the Vita has std,
+# a real allocator and hundreds of megabytes, so the arena trio and worker
+# thread `pocketjs-psp` exists to provide have no counterpart to reuse here.
+# What IS borrowed is a design — the PCM ring in src/audio.rs follows
+# vendor/pocketjs/hosts/vita/src/audio.rs, which is where its disciplines
+# (single writer, starvation sleeps, port owned by the main thread) were
+# earned.
+#
+# The 32 MB pak is a FILE inside the VPK (never include_bytes!) — see
+# main.rs.
+
+[package]
+name = "pocketvoxel-vita"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+vitasdk-sys = { version = "0.3.3", features = [
+    "SceAppMgr_stub",
+    "SceAudio_stub",
+    "SceCommonDialog_stub",
+    "SceCtrl_stub",
+    "SceDisplay_stub",
+    "SceGxm_stub",
+    "SceKernelDmacMgr_stub",
+    "SceKernelThreadMgr_stub",
+    "SceLibKernel_stub",
+    "SceSysmodule_stub",
+] }
+libquickjs-sys = { git = "https://github.com/pocket-stack/quickjs-rs.git", rev = "ba5bdd0dc013518768e76cd9e05cd30ed53dd35b" }
+pocketvoxel-core = { path = "../pocketvoxel-core" }
+pocketvoxel-gxm = { path = "../pocketvoxel-gxm" }
+# vita2d owns process-level GXM: the context, the shader patcher, the render
+# target, the shared depth buffer, the per-frame GPU pool and the swap. The
+# backend composes inside its scene.
+vita2d-sys = "0.1.1"
+
+
+[[bin]]
+name = "pocketvoxel-vita"
+path = "src/main.rs"
+
+[features]
+# Per-300-frame work/frame timing appended to ux0:data/voxelmon/voxperf.txt.
+# Dev scaffolding; a shipped VPK leaves it out.
+telemetry = []
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[package.metadata.vita]
+title_name = "Pocket Voxel"
+title_id = "PVOX00001"
+# vita-elf-create reads sceUserMainThreadStackSize from the ELF symbol table;
+# the release default would strip it and fall back to Vita's 4 KiB stack,
+# which is far too small for QuickJS.
+[package.metadata.vita.profile.release]
+strip_symbols = false
