@@ -52,7 +52,7 @@ cook time (Bun, your machine)            run time (PSP)
 └─ tapes/   intent tapes → .vtrace       │    rungs, draw list, chip synth
      (the acceptance path)               └─ the backend for this machine:
                                               pocketvoxel-gu  (PSP, sceGu)
-                                              pocketvoxel-gl  (Vita, vitaGL)
+                                              pocketvoxel-gxm (Vita, GXM)
 ```
 
 - **One pak, many machines.** Fidelity is a runtime *ladder*, not a build
@@ -98,9 +98,9 @@ served from `host0:`.
 ### PS Vita
 
 The Vita runs the same guest bundle and the same cooked pak; a second backend
-(`crates/pocketvoxel-gl`, vitaGL over GXM) draws the same draw list at the
-native 960x544 raster while the logical viewport stays 480x272. Needs
-[VitaSDK](https://vitasdk.org) with vitaGL (`vdpm vitaGL`) and
+(`crates/pocketvoxel-gxm`, raw GXM) draws the same draw list at the native
+960x544 raster while the logical viewport stays 480x272. Needs
+[VitaSDK](https://vitasdk.org) and
 [cargo-vita](https://github.com/vita-rust/cargo-vita).
 
 ```sh
@@ -110,11 +110,8 @@ bun tools/voxel.ts vita --release   # dist/voxelmon/voxelmon.vpk
 
 The VPK carries the pak inside it, so installing that one file is the whole
 install: copy it to the console (VitaShell's `SELECT` starts USB or FTP),
-press `X` on it, confirm. **The console needs `libshacccg.suprx`** — vitaGL
-compiles even its fixed-function shaders on the device, so the PS Vita's own
-shader compiler module must be installed (VitaDeploy or ShaccCgSetup does it
-once, and every vitaGL homebrew shares it). Without it the application says
-so and stops, rather than showing a black screen.
+press `X` on it, confirm. The VPK is self-contained — it ships libvita2d's
+precompiled GXM shaders, so a stock HENkaku console needs nothing else on it.
 
 ```sh
 bun test                    # 208 tests; ROM-gated suites skip with a reason

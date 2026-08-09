@@ -4,14 +4,13 @@
 #   crates/pocketvoxel-gu   PSP-only sceGu backend (cargo-psp toolchain)
 #   crates/pocketvoxel-psp  the EBOOT (cargo-psp; must live outside any
 #                           workspace — the hosts/psp rule)
-#   crates/pocketvoxel-gl   Vita-only vitaGL backend (cargo-vita toolchain)
+#   crates/pocketvoxel-gxm  Vita-only raw-GXM backend (cargo-vita toolchain)
 #   crates/pocketvoxel-vita the VPK (cargo-vita, same lone-bin rule)
 # vendor/ keeps the engine's own workspaces out of this one.
 [workspace]
 resolver = "2"
 members = ["crates/pocketvoxel-core", "crates/pocketvoxel-sim"]
 exclude = [
-    "crates/pocketvoxel-gl",
     "crates/pocketvoxel-gxm",
     "crates/pocketvoxel-gu",
     "crates/pocketvoxel-psp",

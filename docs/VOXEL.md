@@ -71,7 +71,7 @@ crates/
                       list lifecycle (the pocket3d-gu contract). (standalone)
   pocketvoxel-psp/    the EBOOT: QuickJS realm + voxel surface + gu backend.
                       (standalone, hosts/psp toolchain pins)
-  pocketvoxel-gl/     vitaGL backend (§12). Same draw list, same contract as
+  pocketvoxel-gxm/    raw-GXM backend (§12). Same draw list, same contract as
                       the gu backend. (standalone)
   pocketvoxel-vita/   the VPK: QuickJS realm + voxel surface + gl backend +
                       the PCM ring. (standalone, cargo-vita)
@@ -928,10 +928,11 @@ made, and cues fired from the wrong moment.
 
 The Vita runs the same guest bundle, the same cooked pak and the same core as
 the PSP. What is new is a second backend for the one draw list
-(`crates/pocketvoxel-gl`) and a second application shell around it
+(`crates/pocketvoxel-gxm`) and a second application shell around it
 (`crates/pocketvoxel-vita`). Build it with `bun tools/voxel.ts vita --release`;
-the result is `dist/voxelmon/voxelmon.vpk`, which carries the pak inside it, so
-installing that one file in VitaShell is the whole install.
+the result is `dist/voxelmon/voxelmon.vpk`, which **carries the pak inside
+it**, so installing that one file in VitaShell is the whole install and the
+console needs nothing else on it.
 
 **One bundle, two machines, because the HOST names the rung.** `psp-main.ts`
 never mentions a console. The quality rung is a host decision the shell makes
@@ -940,89 +941,103 @@ VPK is byte-identical to the one baked into the EBOOT. `--tier
 <psp|vita|desktop>` overrides the rung for an A/B measurement without editing
 the spec.
 
-### The backend
+### GXM is shader-only, so the shaders arrive already compiled
 
-The core's projection is already `Mat4::perspective_gl`, so GL's own
-conventions — depth range [0, 1], `GL_LEQUAL`, clear depth 1.0 — **are** the
-software rasterizer's "less wins". The GE backend has to express the same two
-relations through the GE's inverted 16-bit range; this one does not, and the
-ghost's occluded-only pass is a plain `GL_GREATER`.
+There is no OpenGL on this machine. The native API is **SceGxm**, and it has
+no fixed-function pipe at all: every draw needs a compiled vertex/fragment
+program pair. Compiling on the console means Sony's `libshacccg.suprx`, a
+firmware module that is not installed by default — so the way to need no
+compiler is to bring programs that are already compiled.
 
-Four differences from `pocketvoxel-gu` carry the port:
+libvita2d's five are, and `pocket3d-vita` — the backend OpenStrike ships —
+established both the technique and the provenance record for reusing them.
+This backend reads the same `.gxp` binaries out of that crate's `shaders/`
+directory, so the tree keeps one copy and one attribution.
 
-- **The pak's vertex and index pools are GL buffer objects**, uploaded once at
-  boot, and a mesh draws by re-pointing the attribute byte offsets at its own
-  `vert_base` — the pak stores each mesh's indices relative to that base, so
-  folding it into the offsets is what makes them correct without a
-  base-vertex draw. vitaGL's fixed-function path skips both the index scan and
-  the staging copy when every attribute comes from a buffer object, so the
-  world pass costs **no per-vertex CPU at all**.
-- **`GL_SHORT` attributes are not normalized here.** vitaGL maps them to
-  GXM's `S16`, so the cooked i16 world coordinates arrive as the integers they
-  are and the model matrix is a plain seam translation — no ×32768
-  counter-scale. The cooked UVs still carry the GE's 1/32768 fixed point, and
-  that divisor rides in the **texture matrix** instead, set once per frame.
-- **The CLUT is resolved on the CPU.** GXM has no palette sampler vitaGL
-  exposes, so `atlas.rs` expands each (page, frame, palette, tinted) pair into
-  an RGBA texture and caches it under a 24 MB budget. The day tint multiplies
-  into the palette exactly as the GE backend's CLUT rewrite does, so a `tint`
-  op drops every tinted texture — correct because the guest emits `tint` on
-  map transitions, not per frame.
-- **The raster is native 960x544.** The logical viewport stays 480x272 (the
-  camera, the UI layout and every golden are defined there) and only the
-  physical viewport doubles, so geometry is transformed once and rasterized at
-  four times the pixels. Atlases sample `GL_NEAREST`, so the art reads as the
-  same picture rather than a blurred one, and the GB UI layer keeps its
-  fractional logical position instead of rounding to a device pixel as the GE
-  backend must.
+What those five give, and what they cost:
 
-`resolve_pal` is shared with the other two backends, so the software
-rasterizer, the GE and GXM cannot bind different colours for the same draw.
+```text
+color_v    aPosition, aColor    + uniform wvp
+texture_v  aPosition, aTexcoord + uniform wvp
+```
 
-### Why vitaGL, and the cost that choice carries
+- **The textured program carries no per-vertex colour**, so an opaque mesh
+  draws TWICE over the same indices — the texel, then the pak's AO through
+  `color_v` with a `dst * src` blend. That pair is what one
+  `TextureEffect::Modulate` gets the GE.
+- **GXM has no alpha test**, and these shaders cannot discard. The GE cuts
+  sprite art out with `AlphaFunc::Greater 0x7f`; here alpha is resolved by
+  blending and draw order instead, so the passes split by whether their art is
+  cut out (below).
 
-There are two ways to draw 3D on this machine, and this family already
-contains the other one. `vendor/pocketjs/engine/pocket3d/crates/pocket3d-vita`
-drives **raw GXM with libvita2d's precompiled `.gxp` shaders** (checked in,
-with their provenance recorded), which is how OpenStrike ships a Vita VPK
-that installs as one file and runs on any HENkaku console.
+The vertex attribute FORMAT is where the cooked layout survives unchanged:
+`S16` takes the pak's i16 world positions as the integers they are — the GE
+needs a ×32768 model scale to undo its own normalization and nothing here
+does — `S16N` reads the fixed-point UVs as 0..1, and `U8N` reads the ABGR
+straight. The 16-byte `PakVert` is therefore read twice out of one GPU buffer
+at different attribute offsets, with no repacking.
 
-vitaGL was chosen here because its GL ES 1.1 fixed function is the closest
-thing on this hardware to the GE the sibling backend targets: hardware alpha
-test, per-vertex colour modulate and a texture matrix are all native, so the
-Vita picture is the PSP picture at four times the pixels rather than an
-approximation of it. The vita2d shader set cannot express that pass — its
-textured program takes no per-vertex colour, and **GXM has no fixed-function
-alpha test**. `pocket3d-vita` pays for both: baked per-vertex lighting
-becomes a second multiply-blended pass over the same geometry, and cutout
-textures are drawn late with alpha blending and a flat per-run tint.
+Depth needs no contortion either. The core projects with
+`Mat4::perspective_gl`, so `LESS_EQUAL` against a buffer cleared to far IS the
+rasterizer's "less wins", and the player ghost's occluded-only pass is
+`GREATER` — where the GE backend has to express both through its inverted
+16-bit range.
 
-That price is small for OpenStrike's world geometry and large here. Pocket
-Voxel is cutout-dominated — grass, flowers, every entity billboard and the
-whole GB UI layer are alpha-cutout sprites, and §6 names hardware alpha test
-as what makes them work.
+### What the missing alpha test actually costs
 
-**The cost of the vitaGL choice is the prerequisite below**, and it is a real
-one: it breaks the one-file install that every other Pocket app on this
-machine offers. A GXM backend that keeps the picture is the flagged
-follow-up, and the question it has to answer first is what replaces the alpha
-test for cutouts this dense.
+- **Solid geometry** — terrain, the ground bake, all three tree levels, water
+  — draws opaque with depth writes and takes its AO pass. Its silhouette is
+  carved into the mesh, not into the texture, so nothing is lost.
+- **Cut-out geometry** — grass, flowers, billboard cards — draws
+  alpha-blended and depth-preserving, in the list's own order, and takes **no
+  AO pass**. The multiply pass carries no texture, so where a texel was
+  transparent it would darken the background into a visible rectangle; losing
+  the AO on a grass tuft is the cheaper error. Depth-preserving means cut-out
+  geometry does not occlude other cut-out geometry.
+- **The GB UI layer** loses nothing at all: it is 2D, drawn last and never
+  depth-tested, so blending is exactly what the GE's cutout produced.
 
-### libshacccg.suprx is a hard prerequisite
+`crates/pocketvoxel-gl`, a vitaGL backend that reproduces the GE picture
+exactly (its GL ES 1.1 fixed function has hardware alpha test, per-vertex
+modulate and a texture matrix), was built first and then removed: vitaGL
+compiles even its fixed-function shaders on the console, which made
+`libshacccg.suprx` a hard prerequisite and broke the one-file install every
+other Pocket app on this machine offers. It is recoverable from this branch's
+history if the cut-out fidelity above is ever worth a prerequisite.
 
-**vitaGL builds even its fixed-function shaders at runtime.** `ffp.c`'s
-`reload_ffp_shaders` formats a Cg source for the exact state mask a draw needs
-and hands it to `shark_compile_shader_extended`, so the PS Vita's own shader
-compiler module has to be present on the console — this is not an optional
-extra for GLSL programs. The VPK links `SceShaccCg_stub_weak` rather than the
-strong stub so that a console without the module still *launches* the
-application; `require_shader_compiler()` then checks the three install
-locations and halts with an explanation, and writes it to
-`ux0:data/voxelmon/error.txt` as well, because the player who hits this is
-looking at a black screen with no way to read a log.
+### Memory and the frame
 
-The module is installed once, with VitaDeploy or ShaccCgSetup, and every
-vitaGL homebrew on the system shares it.
+vita2d owns process-level GXM — the context, the shader patcher, the render
+target, the shared depth buffer, the per-frame GPU pool and the swap — and
+this backend composes inside its scene, exactly as `pocket3d-vita` does:
+
+```text
+vita2d_start_drawing() / vita2d_clear_screen()
+  renderer.render(&draw::build(&scene, &pak), &pak)
+vita2d_end_drawing() / vita2d_swap_buffers()
+```
+
+The clear colour is the sky's below-horizon band and has to be set before the
+scene opens, which is the one place the GE's sky pass (which owns its own
+clear) and this one differ in shape rather than degree.
+
+The pak's vertex and index pools are copied once into GXM-mapped blocks — the
+GPU cannot read the heap the pak was loaded into, and that copy is the only
+one the port makes. After it every chunk draws from its cooked bytes in place.
+Atlas pages upload as `LinearStrided` textures, which take any width, so a
+cooked page needs no power-of-two envelope and no `sceGuTexScale` counterpart;
+the CLUT is resolved on the CPU into a 24 MB budgeted RGBA cache keyed by
+(page, frame, palette, tinted), because GXM binds only one palette per texture
+object and RED++ samples one page through several within a frame. Cache
+eviction is **deferred three frames** so a texture is never freed while the
+GPU may still be reading the frame that referenced it.
+
+**The raster is native 960x544.** The logical viewport stays 480x272 — the
+camera, the UI layout and every golden are defined there — and only the
+physical viewport doubles, so geometry is transformed once and rasterized at
+four times the pixels. Atlases sample POINT, so the art reads as the same
+picture rather than a blurred one, and the GB UI layer keeps its fractional
+logical position instead of rounding to a device pixel as the GE backend must.
 
 ### The shell
 
@@ -1030,19 +1045,18 @@ No PocketJS host library sits underneath. The Vita has std, a real allocator
 and hundreds of megabytes, so the arena trio and worker thread `pocketjs-psp`
 exists to provide have no counterpart to reuse; what is borrowed is a design,
 not code — the PCM ring in `src/audio.rs` follows
-`vendor/pocketjs/hosts/vita/src/audio.rs`, which is where its disciplines
-(single writer, starvation sleeps rather than queued silence, the port opened
-and released on the main thread) were earned.
+`vendor/pocketjs/hosts/vita/src/audio.rs`, where its disciplines (single
+writer, starvation sleeps rather than queued silence, the port opened and
+released on the main thread) were earned.
 
 Three things the PSP shell spends effort on are simply absent:
 
 - **no partition arithmetic.** The 32 MB pak is read straight into one
-  16-byte-aligned heap block and leaked. There is no MEMSIZE flag, no
-  power-of-two allocation class to dodge, and no reason not to hold the pak
-  and its buffer-object copy at the same time.
-- **no pipelined present.** `vglSwapBuffers` ends the GXM scene, queues the
-  flip and paces the loop against vsync; the PCM pump runs after it, while the
-  GPU is still consuming the frame.
+  16-byte-aligned heap block and leaked. There is no MEMSIZE flag and no
+  power-of-two allocation class to dodge.
+- **no pipelined present.** The swap queues the flip and paces the loop
+  against vblank; the PCM pump runs after it, while the GPU is still consuming
+  the frame.
 - **no arena-pressure heuristic.** The collection still runs on a warp
   landing, where the guest holds the world frozen through the fade and the
   stall is an invisible held cut, but the trigger is the landing itself rather
@@ -1050,3 +1064,14 @@ Three things the PSP shell spends effort on are simply absent:
 
 Buttons match the EBOOT: CIRCLE confirms, CROSS cancels, and the left stick
 walks one axis at a time.
+
+### A boot that cannot fail silently
+
+A console has no console. There is no log a player can read, and a memory card
+needs a USB session and a working machine to inspect — so graphics come up
+FIRST, before the pak and before QuickJS, and every later stage owns a colour:
+amber for a pak that was not found, magenta for one that did not validate,
+grey for pools that would not fit, cyan for a guest that threw (with the
+exception text). Every stage also appends to `ux0:data/voxelmon/boot.txt`, and
+the first frames log what they actually drew, so "running but blank" and
+"never got there" cannot look alike.
