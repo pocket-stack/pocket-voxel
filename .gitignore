@@ -17,3 +17,7 @@ node_modules/
 # Local Wrangler development state is machine-specific and may contain
 # transient cache/observability databases.
 /.wrangler/
+
+# VitePress build output and cache (docs site)
+docs/.vitepress/cache/
+docs/.vitepress/dist/
