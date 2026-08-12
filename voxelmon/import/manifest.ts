@@ -131,7 +131,3 @@ export interface Manifest {
   };
   audio: AudioSpec;
 }
-
-export async function loadManifest(path: string): Promise<Manifest> {
-  return (await Bun.file(path).json()) as Manifest;
-}

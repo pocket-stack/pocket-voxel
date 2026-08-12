@@ -1,20 +1,8 @@
 // voxelmon/cook/data.ts — cook-time inputs (voxelmon/SCHEMA.md).
 //
-// Loads dist/voxelmon/gen/*.json + gfx.bin, wraps a map the way the
-// gen1recomp runtime does (Map.lua: tileAt border-extends, every cell rule
-// judges the cell's BOTTOM-LEFT tile), and converts the VoxelMod profile
-// (data/voxel_heights.lua) to JSON through a LuaJIT one-shot — the same
-// mechanism the importer's parity path uses.
-
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-import type { RedppPack } from "./redpp.ts";
-
-export const ROOT = fileURLToPath(new URL("../..", import.meta.url));
-export const GEN_DIR = join(ROOT, "dist/voxelmon/gen");
+// Browser-safe data model shared by the importer and cooker. Filesystem and
+// LuaJIT adapters live in data-node.ts; nothing in this module may depend on
+// Bun, Node, paths, environment variables, or a process-global cache.
 
 // ---------------------------------------------------------------------------
 // gen/ dataset
@@ -103,40 +91,6 @@ export interface GenData {
   textPointers: unknown;
   trainerHeaders: unknown;
   field: Record<string, unknown>;
-}
-
-export function genMissingReason(genDir = GEN_DIR): string | null {
-  if (!existsSync(join(genDir, "maps.json"))) {
-    return `imported dataset not found: ${genDir} (run \`bun tools/voxel.ts import\`)`;
-  }
-  return null;
-}
-
-function readJson<T>(genDir: string, name: string): T {
-  return JSON.parse(readFileSync(join(genDir, name), "utf8")) as T;
-}
-
-export function loadGen(genDir = GEN_DIR): GenData {
-  return {
-    maps: readJson(genDir, "maps.json"),
-    tilesets: readJson(genDir, "tilesets.json"),
-    palettes: readJson(genDir, "palettes.json"),
-    sprites: readJson(genDir, "sprites.json"),
-    gfx: readJson(genDir, "gfx.json"),
-    gfxBin: new Uint8Array(readFileSync(join(genDir, "gfx.bin"))),
-    font: readJson(genDir, "font.json"),
-    constants: readJson(genDir, "constants.json"),
-    encounters: readJson(genDir, "encounters.json"),
-    moves: readJson(genDir, "moves.json"),
-    pokemon: readJson(genDir, "pokemon.json"),
-    items: readJson(genDir, "items.json"),
-    typeChart: readJson(genDir, "type_chart.json"),
-    trainers: readJson(genDir, "trainers.json"),
-    text: readJson(genDir, "text.json"),
-    textPointers: readJson(genDir, "text_pointers.json"),
-    trainerHeaders: readJson(genDir, "trainer_headers.json"),
-    field: readJson(genDir, "field.json"),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -269,7 +223,7 @@ export class GameMap {
 }
 
 // ---------------------------------------------------------------------------
-// the VoxelMod profile (data/voxel_heights.lua) via a LuaJIT one-shot
+// the VoxelMod profile (data/voxel_heights.lua after lua-dump normalization)
 // ---------------------------------------------------------------------------
 
 // The profile's shape after lua-dump normalization: numeric keys stringify.
@@ -312,83 +266,4 @@ export interface BuildingTemplate {
   desk?: unknown;
   tray?: unknown;
   wall?: unknown;
-}
-
-const LUA_DUMP = fileURLToPath(new URL("../import/lua-dump.lua", import.meta.url));
-
-export function voxelmodDir(): string {
-  return process.env.VOXELMON_VOXELMOD ?? join(homedir(), "code/DramaticShapeVoxelMod");
-}
-
-let profileCache: Profile | null | undefined;
-
-/** Load data/voxel_heights.lua, or null (with a printed reason) when absent. */
-export function loadProfile(): Profile | null {
-  if (profileCache !== undefined) return profileCache;
-  const path = join(voxelmodDir(), "data/voxel_heights.lua");
-  if (!existsSync(path)) {
-    console.error(`voxel cook: profile not found: ${path} (set VOXELMON_VOXELMOD)`);
-    profileCache = null;
-    return null;
-  }
-  if (!Bun.which("luajit")) {
-    console.error("voxel cook: luajit is not installed (needed to read voxel_heights.lua)");
-    profileCache = null;
-    return null;
-  }
-  const proc = Bun.spawnSync(["luajit", LUA_DUMP, path]);
-  if (proc.exitCode !== 0) {
-    throw new Error(`lua-dump failed for ${path}:\n${proc.stderr.toString()}`);
-  }
-  profileCache = JSON.parse(proc.stdout.toString()) as Profile;
-  return profileCache;
-}
-
-// ---------------------------------------------------------------------------
-// the RED++ color pack (gen1recomp data/palettes_gbc.lua) via the same
-// LuaJIT one-shot, cached under dist/ — voxelmon/SCHEMA.md §gen/
-// ---------------------------------------------------------------------------
-
-export function gen1recompDir(): string {
-  return process.env.VOXELMON_G1R ?? join(homedir(), "code/gen1recomp");
-}
-
-let redppCache: RedppPack | null | undefined;
-
-/**
- * Load `data/palettes_gbc.lua` (pokered-gbc-derived, MIT, NOT ROM-derived),
- * dumped to `gen/palettes_gbc.json` and re-dumped whenever the source is
- * newer. Returns null — with a printed reason, the `loadProfile` discipline
- * — when the checkout or luajit is absent; the cooker then omits every
- * RED++ binding and the pak renders exactly as it does today.
- */
-export function loadRedpp(genDir = GEN_DIR): RedppPack | null {
-  if (redppCache !== undefined) return redppCache;
-  const path = join(gen1recompDir(), "data/palettes_gbc.lua");
-  const cache = join(genDir, "palettes_gbc.json");
-  if (!existsSync(path)) {
-    console.error(`voxel cook: RED++ color pack not found: ${path} (set VOXELMON_G1R)`);
-    redppCache = null;
-    return null;
-  }
-  const fresh =
-    existsSync(cache) && statSync(cache).mtimeMs >= statSync(path).mtimeMs;
-  if (fresh) {
-    redppCache = JSON.parse(readFileSync(cache, "utf8")) as RedppPack;
-    return redppCache;
-  }
-  if (!Bun.which("luajit")) {
-    console.error("voxel cook: luajit is not installed (needed to read palettes_gbc.lua)");
-    redppCache = null;
-    return null;
-  }
-  const proc = Bun.spawnSync(["luajit", LUA_DUMP, path]);
-  if (proc.exitCode !== 0) {
-    throw new Error(`lua-dump failed for ${path}:\n${proc.stderr.toString()}`);
-  }
-  const json = proc.stdout.toString();
-  mkdirSync(genDir, { recursive: true });
-  writeFileSync(cache, json);
-  redppCache = JSON.parse(json) as RedppPack;
-  return redppCache;
 }

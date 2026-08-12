@@ -1,0 +1,19 @@
+{
+  "sources": {
+    "gen1recomp": {
+      "url": "https://github.com/bryanthaboi/gen1recomp",
+      "commit": "f0ed2efe072a40a73f102a3f8d709d20d5d30b31",
+      "files": [
+        "tools/rom_manifest.json",
+        "data/palettes_gbc.lua"
+      ]
+    },
+    "DramaticShapeVoxelMod": {
+      "url": "https://github.com/DramaticShape/DramaticShapeVoxelMod",
+      "commit": "8ef4d2908f4fd26e4bd85dd06f7b94fc5f172a0f",
+      "files": [
+        "data/voxel_heights.lua"
+      ]
+    }
+  }
+}

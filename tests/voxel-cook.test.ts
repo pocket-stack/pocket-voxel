@@ -29,8 +29,8 @@ import {
   genMissingReason,
   loadGen,
   loadRedpp,
-  PX_CLEAR,
-} from "../voxelmon/cook/data.ts";
+} from "../voxelmon/cook/data-node.ts";
+import { PX_CLEAR } from "../voxelmon/cook/data.ts";
 import { buildCharmap, buildMapPalette } from "../voxelmon/cook/gamedata.ts";
 import {
   cullHidden,
@@ -243,7 +243,7 @@ describe.skipIf(reason !== null)("voxel cook", () => {
     }
   });
 
-  test("the cull drops only -Y faces, and VOXEL_KEEP_HIDDEN puts them back", () => {
+  test("the cull drops only -Y faces, and keepHidden puts them back", () => {
     const quads: Quad[] = [
       { c: box(0, 40, 0), shade: 1, f: FACE.down }, // above the floor: kept
       { c: box(0, 8, 0), shade: 1, f: FACE.down }, // below it: dropped
@@ -251,6 +251,7 @@ describe.skipIf(reason !== null)("voxel cook", () => {
       { c: box(8, 8, 0), shade: 1, f: FACE.up },
     ];
     expect(cullHidden(quads).map((q) => q.f)).toEqual([FACE.down, FACE.north, FACE.up]);
+    expect(cullHidden(quads, false, true).length).toBe(quads.length);
     // Pulled streams (grass, flower) are exempt whatever they face.
     expect(cullHidden(quads, PULLED).length).toBe(quads.length);
   });

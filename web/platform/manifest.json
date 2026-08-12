@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "vxpkVersion": 8,
+  "sourceRevision": "ebf2af44f87cc9cd946c6cade1333d0d264be048",
+  "guestSha256": "c5a81820bdb009acfe8f6fbace0c36af0483736528492c6801197e03a33b455b",
+  "psp": {
+    "modelRequirement": "PSP-2000 or newer with CFW, or PPSSPP",
+    "files": [
+      {
+        "id": "prx",
+        "path": "psp/pocketvoxel-psp.prx",
+        "bytes": 2306884,
+        "sha256": "7da78924dd64d03a154a3579d84b5cbada670a00d740e7191dc1090179162582"
+      },
+      {
+        "id": "icon0",
+        "path": "psp/ICON0.png",
+        "bytes": 1932,
+        "sha256": "797dbf858835de8984668907d090511da378546eaad58f6c6779667870c242b9"
+      },
+      {
+        "id": "pic1",
+        "path": "psp/PIC1.png",
+        "bytes": 4713,
+        "sha256": "02a752e4c1ae6fe40eb9aefc2bc89210ba3281c7b403c26ee22119abf6905c25"
+      },
+      {
+        "id": "notices",
+        "path": "THIRD_PARTY_NOTICES.txt",
+        "bytes": 112710,
+        "sha256": "11e4350752545fd479cc4e20b1e7bc062ab522175d78ed1e2daccc599ada2671"
+      }
+    ]
+  },
+  "vita": {
+    "titleId": "PVOX00001",
+    "qualityTier": "vita",
+    "files": [
+      {
+        "id": "eboot",
+        "path": "vita/eboot.bin",
+        "bytes": 2085610,
+        "sha256": "e69f4daa6c7f396947d5e576dd858fef23cf692e801c0d06eed05ff2961818fe"
+      },
+      {
+        "id": "sfo",
+        "path": "vita/sce_sys/param.sfo",
+        "bytes": 912,
+        "sha256": "40a6d6afc8b998683a66faf451ebcd4702fba3c7cc58bd059e147be31f39e729"
+      },
+      {
+        "id": "icon0",
+        "path": "vita/sce_sys/icon0.png",
+        "bytes": 828,
+        "sha256": "1e4fe0ef8a707ee80a4deea5542f7d20c023d4d2560120894f2eb46e938ba8db"
+      },
+      {
+        "id": "background",
+        "path": "vita/sce_sys/livearea/contents/bg.png",
+        "bytes": 2695,
+        "sha256": "c4bc371c4aa1d4f79388aa11a85a09a9324367069a609093f63130f25f10ba38"
+      },
+      {
+        "id": "startup",
+        "path": "vita/sce_sys/livearea/contents/startup.png",
+        "bytes": 591,
+        "sha256": "faac6ed96c764210d9f62e4ac6221717486a6db6cf171ac00701f3ddea43b7d9"
+      },
+      {
+        "id": "template",
+        "path": "vita/sce_sys/livearea/contents/template.xml",
+        "bytes": 249,
+        "sha256": "fe2f71ed5753c31a4f6c06cb0d1d33d4620f8d3ad72b07ab32541f74b99bae8c"
+      },
+      {
+        "id": "notices",
+        "path": "THIRD_PARTY_NOTICES.txt",
+        "bytes": 112710,
+        "sha256": "11e4350752545fd479cc4e20b1e7bc062ab522175d78ed1e2daccc599ada2671"
+      }
+    ]
+  }
+}

@@ -33,7 +33,6 @@
 mod e2e;
 mod fnv;
 mod png;
-mod raster;
 mod trace;
 mod wav;
 
@@ -41,6 +40,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use pocketvoxel_core::pak::{self, AlignedBlob};
+use pocketvoxel_sim::raster;
 
 struct Args {
     pak: PathBuf,

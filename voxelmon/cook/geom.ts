@@ -50,8 +50,8 @@ export interface Quad {
 
 /**
  * The hidden-face cull: faces no camera this runtime can build will ever see
- * from the front, dropped at cook time. `VOXEL_KEEP_HIDDEN=1` restores every
- * face, which is the A/B control the acceptance runs use.
+ * from the front, dropped at cook time. The caller's `keepHidden` option
+ * restores every face, which is the A/B control the acceptance runs use.
  *
  * **What the cameras can reach.** The field camera has a FIXED AZIMUTH
  * (pocketvoxel-core/src/cam.rs `orbit`): the eye is always
@@ -89,8 +89,6 @@ export interface Quad {
  * lower `RIG.*.height`, a sixth pitch rung past 75 degrees — invalidates the
  * cooked pak, not just this file.
  */
-export const KEEP_HIDDEN = process.env.VOXEL_KEEP_HIDDEN === "1";
-
 /** Eye-height floor in world px, held under the runtime's lowest camera
  * (27.91, the wide battle rig). A -Y face topping out at or below this is
  * back-facing for every camera. */
@@ -106,8 +104,8 @@ export function visibleFacing(f: Facing, topY: number): boolean {
 }
 
 /** Drop the faces `visibleFacing` rules out. THE one drop site. */
-export function cullHidden(quads: Quad[], pulled = false): Quad[] {
-  if (KEEP_HIDDEN || pulled) return quads;
+export function cullHidden(quads: Quad[], pulled = false, keepHidden = false): Quad[] {
+  if (keepHidden || pulled) return quads;
   return quads.filter((q) => visibleFacing(q.f, Math.max(...q.c.map((c) => c[1]))));
 }
 

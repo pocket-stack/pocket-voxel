@@ -98,6 +98,7 @@ export function analyseMap(
   map: GameMap,
   profile: Profile | null,
   buildingStats: BuildingStats,
+  treeBoxes = false,
 ): SGrid {
   const art = artOf(gen, sheetKeyOf(map.tileset));
   if (!art) throw new Error(`missing tileset art: ${sheetKeyOf(map.tileset)}`);
@@ -215,7 +216,7 @@ export function analyseMap(
       }
     }
   }
-  buildCylinders(S, map, art, groundTiles);
+  buildCylinders(S, map, art, groundTiles, treeBoxes);
 
   // ---- flood-fill regions of structural tiles -> volumes ----
   const seen = new Set<number>();

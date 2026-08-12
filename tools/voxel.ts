@@ -172,12 +172,28 @@ async function buildEboot(cargoArgs: string[]): Promise<number> {
   const sdk = toolchain.sdk.path;
   const llvm = toolchain.llvmBin;
   const ebootDir = `${ROOT}${EBOOT_DIR}`;
+  const sourceRoot = ROOT.replace(/\/$/, "");
+  const sourceHome = process.env.HOME ?? ROOT;
+  const pathRemaps = [
+    `--remap-path-prefix=${sourceHome}=/source/home`,
+    `--remap-path-prefix=${sourceRoot}=/source/pocket-voxel`,
+  ];
+  const cPathRemap = [
+    `-ffile-prefix-map=${sourceHome}=/source/home`,
+    `-fmacro-prefix-map=${sourceHome}=/source/home`,
+    `-ffile-prefix-map=${sourceRoot}=/source/pocket-voxel`,
+    `-fmacro-prefix-map=${sourceRoot}=/source/pocket-voxel`,
+  ].join(" ");
 
   const env: Record<string, string | undefined> = {
     ...toolchain.environment,
     // newlib (QuickJS needs -lc) and rust-psp both define memcpy/_exit/…
     // with identical semantics; whichever the linker sees first wins.
-    RUSTFLAGS: [process.env.RUSTFLAGS ?? "", "-A linker-messages -C link-arg=--allow-multiple-definition"]
+    RUSTFLAGS: [
+      process.env.RUSTFLAGS ?? "",
+      ...pathRemaps,
+      "-A linker-messages -C link-arg=--allow-multiple-definition",
+    ]
       .filter(Boolean)
       .join(" "),
     CRATE_CC_NO_DEFAULTS: "1",
@@ -186,7 +202,7 @@ async function buildEboot(cargoArgs: string[]): Promise<number> {
     TARGET_CFLAGS:
       `-target mipsel-sony-psp -mcpu=mips2 -msingle-float -mlittle-endian -mno-abicalls ` +
       `-fno-pic -G0 -mno-check-zero-division -fno-stack-protector ` +
-      `-I${sdk}/psp/include -I${sdk}/psp/sdk/include`,
+      `-I${sdk}/psp/include -I${sdk}/psp/sdk/include ${cPathRemap}`,
     AR_mipsel_sony_psp: `${llvm}/llvm-ar`,
     RANLIB_mipsel_sony_psp: `${llvm}/llvm-ranlib`,
     RUST_PSP_TARGET: `${ROOT}vendor/pocketjs/hosts/psp/targets/mipsel-sony-psp.json`,
@@ -239,7 +255,7 @@ async function buildEboot(cargoArgs: string[]): Promise<number> {
     buildSfo([
       ["BOOTABLE", 1],
       ["CATEGORY", "MG"],
-      ["DISC_ID", "UCJS10041"],
+      ["DISC_ID", "PVXL00001"],
       ["DISC_VERSION", "1.00"],
       ["MEMSIZE", 1], // full PSP-2000 memory: the 21 MB pak needs it
       ["PARENTAL_LEVEL", 1],
@@ -292,15 +308,11 @@ const VPK_DIR = "crates/pocketvoxel-vita";
  */
 async function buildVpk(cargoArgs: string[], tier: string): Promise<number> {
   const home = process.env.HOME ?? "";
+  const sourceRoot = ROOT.replace(/\/$/, "");
+  const sourceHome = home || sourceRoot;
   const vitasdk = process.env.VITASDK || `${home}/vitasdk`;
   if (!existsSync(`${vitasdk}/bin/arm-vita-eabi-gcc`)) {
     console.error(`voxel vita: incomplete VitaSDK at ${vitasdk} (set VITASDK)`);
-    return 1;
-  }
-  if (!existsSync(`${vitasdk}/arm-vita-eabi/lib/libvitaGL.a`)) {
-    console.error(
-      `voxel vita: libvitaGL.a missing from ${vitasdk} — run: vdpm vitaGL`,
-    );
     return 1;
   }
   const rustup = Bun.which("rustup") ?? `${home}/.cargo/bin/rustup`;
@@ -324,12 +336,23 @@ async function buildVpk(cargoArgs: string[], tier: string): Promise<number> {
     // and expose the VitaSDK tools without requiring shell dotfiles.
     PATH: `${vitasdk}/bin:${home}/.cargo/bin:${process.env.PATH ?? ""}`,
     VITASDK: vitasdk,
+    RUSTFLAGS: [
+      process.env.RUSTFLAGS ?? "",
+      `--remap-path-prefix=${sourceHome}=/source/home`,
+      `--remap-path-prefix=${sourceRoot}=/source/pocket-voxel`,
+    ].filter(Boolean).join(" "),
     TARGET_CC: "arm-vita-eabi-gcc",
     CC_armv7_sony_vita_newlibeabihf: "arm-vita-eabi-gcc",
     TARGET_CXX: "arm-vita-eabi-g++",
     CXX_armv7_sony_vita_newlibeabihf: "arm-vita-eabi-g++",
     TARGET_AR: "arm-vita-eabi-ar",
     AR_armv7_sony_vita_newlibeabihf: "arm-vita-eabi-ar",
+    CFLAGS_armv7_sony_vita_newlibeabihf: [
+      `-ffile-prefix-map=${sourceHome}=/source/home`,
+      `-fmacro-prefix-map=${sourceHome}=/source/home`,
+      `-ffile-prefix-map=${sourceRoot}=/source/pocket-voxel`,
+      `-fmacro-prefix-map=${sourceRoot}=/source/pocket-voxel`,
+    ].join(" "),
     // The bundled guest and the rung, baked by pocketvoxel-vita/build.rs.
     VOXELMON_JS: `${ROOT}${GAME_JS}`,
     VOXELMON_TIER: tier,
