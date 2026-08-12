@@ -6,47 +6,193 @@
     <meta name="theme-color" content="#071019" />
     <meta
       name="description"
-      content="Insert a ROM you own and play Pocket Voxel inside an interactive 3D handheld."
+      content="Play a Game Boy creature-RPG as a voxelized 3D diorama in your browser, or bake PSP and PS Vita homebrew locally from a ROM you own."
     />
-    <title>Pocket Voxel — A world in your pocket</title>
-    <link rel="icon" href="data:," />
+    <meta name="application-name" content="Pocket Voxel" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://pocketvoxel.games/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Pocket Voxel" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:title" content="Pocket Voxel" />
+    <meta
+      property="og:description"
+      content="Play a Game Boy creature-RPG as a voxelized 3D diorama in your browser, or bake PSP and PS Vita homebrew locally from a ROM you own."
+    />
+    <meta property="og:url" content="https://pocketvoxel.games/" />
+    <meta property="og:image" content="https://pocketvoxel.games/assets/og-image.png" />
+    <meta property="og:image:secure_url" content="https://pocketvoxel.games/assets/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Pocket Voxel displayed inside an interactive 3D Game Boy."
+    />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Pocket Voxel" />
+    <meta
+      name="twitter:description"
+      content="Play a Game Boy creature-RPG as a voxelized 3D diorama in your browser, or bake PSP and PS Vita homebrew locally from a ROM you own."
+    />
+    <meta name="twitter:image" content="https://pocketvoxel.games/assets/og-image.png" />
+    <meta
+      name="twitter:image:alt"
+      content="Pocket Voxel displayed inside an interactive 3D Game Boy."
+    />
+    <title>Pocket Voxel</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <link rel="stylesheet" href="./styles.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "@id": "https://pocketvoxel.games/#application",
+        "name": "Pocket Voxel",
+        "url": "https://pocketvoxel.games/",
+        "description": "Play a Game Boy creature-RPG as a voxelized 3D diorama in your browser, or bake PSP and PS Vita homebrew locally from a ROM you own.",
+        "applicationCategory": "GameApplication",
+        "operatingSystem": "Web browser",
+        "browserRequirements": "Requires JavaScript, WebAssembly, and WebGL.",
+        "image": "https://pocketvoxel.games/assets/og-image.png",
+        "sameAs": "https://github.com/pocket-stack/pocket-voxel",
+        "isAccessibleForFree": true
+      }
+    </script>
   </head>
   <body>
     <div class="landing-glow glow-mint" aria-hidden="true"></div>
     <div class="landing-glow glow-rose" aria-hidden="true"></div>
 
-    <header class="landing-nav">
-      <a class="brand" href="./" aria-label="Pocket Voxel home">
-        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span>POCKET <b>VOXEL</b></span>
+    <header id="topbar" class="landing-nav">
+      <a
+        class="brand"
+        href="https://github.com/pocket-stack/pocket-voxel"
+        target="_blank"
+        rel="noreferrer"
+        aria-label="Pocket Voxel on GitHub"
+      >
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" focusable="false">
+            <defs>
+              <linearGradient id="brand-edge" x1="2" y1="6" x2="30" y2="26" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#eef6ff" />
+                <stop offset=".38" stop-color="#b7c8e2" />
+                <stop offset=".58" stop-color="#7487a0" />
+                <stop offset=".78" stop-color="#aec0d6" />
+                <stop offset="1" stop-color="#dbe8f6" />
+              </linearGradient>
+            </defs>
+            <rect
+              class="brand-frame"
+              x="2"
+              y="6"
+              width="28"
+              height="20"
+              rx="6"
+              fill="none"
+              stroke="url(#brand-edge)"
+              stroke-width="2.6"
+              stroke-linejoin="round"
+            />
+            <path class="brand-voxel brand-voxel--top" d="M16 9.4 22.3 12.9 16 16.4 9.7 12.9 16 9.4Z" />
+            <path class="brand-voxel brand-voxel--left" d="M9.7 12.9 16 16.4v6.8l-6.3-3.5v-6.8Z" />
+            <path class="brand-voxel brand-voxel--right" d="M22.3 12.9 16 16.4v6.8l6.3-3.5v-6.8Z" />
+          </svg>
+        </span>
       </a>
-      <p class="local-note"><span aria-hidden="true"></span> ROM processing stays local</p>
+
+      <div class="mode-controls">
+        <fieldset id="mode-options" class="segmented-switch mode-switch">
+          <legend class="sr-only">Mode</legend>
+          <label>
+            <input id="mode-web" type="radio" name="mode" value="web" checked />
+            <span>Web</span>
+          </label>
+          <label>
+            <input id="mode-homebrew" type="radio" name="mode" value="homebrew" />
+            <span>Homebrew</span>
+          </label>
+        </fieldset>
+
+        <fieldset id="native-target-options" class="segmented-switch platform-switch" hidden>
+          <legend class="sr-only">Homebrew platform</legend>
+          <label>
+            <input id="target-psp" type="radio" name="native-target" value="psp" checked />
+            <span>PSP</span>
+          </label>
+          <label>
+            <input id="target-vita" type="radio" name="native-target" value="vita" />
+            <span>PSV</span>
+          </label>
+        </fieldset>
+      </div>
+
+      <div id="mobile-tools" class="mobile-tools">
+        <button
+          id="mobile-tools-toggle"
+          class="mobile-tools__toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="mobile-tools-panel"
+          aria-label="Open page menu"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M5 7.5h14M5 12h14M5 16.5h14" />
+          </svg>
+        </button>
+        <nav id="mobile-tools-panel" class="nav-tools" aria-label="View and information">
+          <label class="rotation-control" title="Allow dragging the Game Boy to rotate it">
+            <input
+              id="rotation-toggle"
+              type="checkbox"
+              role="switch"
+              aria-controls="stage-canvas"
+              checked
+            />
+            <span class="rotation-control__track" aria-hidden="true"><i></i></span>
+            <span>Rotate</span>
+          </label>
+          <button
+            id="help-open"
+            class="nav-button"
+            type="button"
+            aria-haspopup="dialog"
+            aria-controls="help-dialog"
+          >
+            Help
+          </button>
+          <button
+            id="credits-open"
+            class="nav-button"
+            type="button"
+            aria-haspopup="dialog"
+            aria-controls="credits-dialog"
+          >
+            Credits
+          </button>
+          <a
+            class="nav-icon-button"
+            href="https://github.com/pocket-stack/pocket-voxel"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Pocket Voxel on GitHub"
+            title="Pocket Voxel on GitHub"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12 .75a11.25 11.25 0 0 0-3.56 21.92c.56.1.77-.24.77-.54v-2.1c-3.14.68-3.8-1.33-3.8-1.33-.52-1.3-1.26-1.65-1.26-1.65-1.03-.7.08-.69.08-.69 1.14.08 1.74 1.17 1.74 1.17 1.01 1.74 2.66 1.24 3.31.95.1-.74.4-1.24.72-1.52-2.5-.29-5.14-1.26-5.14-5.56 0-1.23.44-2.23 1.16-3.02-.12-.28-.5-1.43.11-2.98 0 0 .95-.3 3.1 1.15a10.8 10.8 0 0 1 5.64 0c2.15-1.46 3.1-1.15 3.1-1.15.61 1.55.23 2.7.11 2.98.72.79 1.16 1.79 1.16 3.02 0 4.32-2.64 5.27-5.16 5.55.41.35.77 1.04.77 2.1v3.12c0 .3.2.65.78.54A11.25 11.25 0 0 0 12 .75Z" />
+            </svg>
+            <span class="nav-github-label">GitHub</span>
+          </a>
+        </nav>
+      </div>
     </header>
 
-    <main>
+    <main id="app-main">
       <section class="hero" aria-labelledby="hero-title">
-        <div class="hero-copy">
-          <p class="eyebrow">A CARTRIDGE-SIZED 3D WORLD</p>
-          <h1 id="hero-title">Put the whole adventure<br />in your pocket.</h1>
-          <p class="hero-lede">
-            Insert a Pokémon Red cartridge dump you own. Pocket Voxel builds the diorama in this
-            tab, then plays it on the screen and controls of a tactile 3D handheld.
-          </p>
-          <button id="choose-rom" class="insert-button" type="button">
-            <span>Insert your ROM</span><i aria-hidden="true">↗</i>
-          </button>
-          <input id="rom-file" type="file" accept=".gb,application/octet-stream" hidden />
-          <div
-            id="progress-track"
-            class="sr-only"
-            role="progressbar"
-            aria-label="ROM baking progress"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow="0"
-          ></div>
-        </div>
+        <h1 id="hero-title" class="sr-only">Pocket Voxel</h1>
 
         <div id="gameboy-stage" class="device-stage" data-state="idle">
           <div id="stage-viewport" class="stage-viewport" data-stage-viewport>
@@ -58,32 +204,162 @@
             ></canvas>
             <canvas id="screen" width="480" height="272" aria-hidden="true"></canvas>
           </div>
-          <div class="stage-meta" aria-live="polite">
-            <p><span class="status-light" aria-hidden="true"></span><b id="stage-status">READY FOR CARTRIDGE</b></p>
-            <p id="stage-hint">Click the LCD or drop a ROM anywhere</p>
+          <div class="sr-only">
+            <span id="stage-status"></span>
+            <span id="stage-hint"></span>
           </div>
         </div>
-      </section>
 
-      <section class="play-notes" aria-label="Controls and privacy">
-        <p><b>PLAY</b> Arrows / WASD · Z / J = A · X / K = B · Enter = Start</p>
-        <p><b>PRIVATE</b> No ROM bytes or baked game data leave this browser.</p>
+        <div class="action-dock">
+          <div id="target-result" class="target-result" hidden>
+            <p id="target-result-copy"></p>
+            <button id="target-action" class="target-action" type="button"></button>
+          </div>
+          <div class="cartridge-action">
+            <p id="cartridge-prompt">Insert a Pokémon Red cartridge</p>
+            <div class="cartridge-buttons">
+              <button
+                id="choose-rom"
+                class="insert-button"
+                type="button"
+                aria-describedby="cartridge-prompt"
+              >
+                <span>Choose ROM</span><i aria-hidden="true">↗</i>
+              </button>
+              <a
+                class="github-star-button"
+                href="https://github.com/pocket-stack/pocket-voxel"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 .75a11.25 11.25 0 0 0-3.56 21.92c.56.1.77-.24.77-.54v-2.1c-3.14.68-3.8-1.33-3.8-1.33-.52-1.3-1.26-1.65-1.26-1.65-1.03-.7.08-.69.08-.69 1.14.08 1.74 1.17 1.74 1.17 1.01 1.74 2.66 1.24 3.31.95.1-.74.4-1.24.72-1.52-2.5-.29-5.14-1.26-5.14-5.56 0-1.23.44-2.23 1.16-3.02-.12-.28-.5-1.43.11-2.98 0 0 .95-.3 3.1 1.15a10.8 10.8 0 0 1 5.64 0c2.15-1.46 3.1-1.15 3.1-1.15.61 1.55.23 2.7.11 2.98.72.79 1.16 1.79 1.16 3.02 0 4.32-2.64 5.27-5.16 5.55.41.35.77 1.04.77 2.1v3.12c0 .3.2.65.78.54A11.25 11.25 0 0 0 12 .75Z" />
+                </svg>
+                <span>Star on GitHub</span>
+              </a>
+            </div>
+            <input id="rom-file" type="file" accept=".gb,application/octet-stream" hidden />
+            <div
+              id="progress-track"
+              class="sr-only"
+              role="progressbar"
+              aria-label="ROM baking progress"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            ></div>
+          </div>
+          <a
+            class="powered-by"
+            href="https://pocketjs.dev/"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Powered by PocketJS"
+          >
+            <span>Powered by</span>
+            <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+              <defs>
+                <linearGradient id="powered-pj-edge" x1="4" y1="4" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#eef6ff" />
+                  <stop offset=".38" stop-color="#b7c8e2" />
+                  <stop offset=".58" stop-color="#7487a0" />
+                  <stop offset=".78" stop-color="#aec0d6" />
+                  <stop offset="1" stop-color="#dbe8f6" />
+                </linearGradient>
+                <linearGradient id="powered-pj-lens" x1="7" y1="13" x2="13" y2="19" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#e4edf8" />
+                  <stop offset=".55" stop-color="#a7b8cf" />
+                  <stop offset="1" stop-color="#53677f" />
+                </linearGradient>
+                <linearGradient id="powered-pj-bar" x1="16" y1="12" x2="24" y2="20" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#d7e3f1" />
+                  <stop offset="1" stop-color="#71849d" />
+                </linearGradient>
+              </defs>
+              <rect x="2" y="6" width="28" height="20" rx="6" fill="none" stroke="url(#powered-pj-edge)" stroke-width="2.6" stroke-linejoin="round" />
+              <circle cx="10" cy="16" r="3.1" fill="url(#powered-pj-lens)" />
+              <rect x="16" y="12.6" width="10" height="2.2" rx="1.1" fill="url(#powered-pj-bar)" />
+              <rect x="16" y="17.2" width="6.5" height="2.2" rx="1.1" fill="url(#powered-pj-bar)" />
+            </svg>
+            <strong>PocketJS</strong>
+          </a>
+        </div>
       </section>
     </main>
 
-    <footer class="landing-footer">
-      <p>Bring a ROM you lawfully own. Pocket Voxel includes no game content.</p>
-      <p>
-        <a href="https://poly.pizza/m/dczUnD4aslM">“Gameboy” by Jason Toff</a>,
-        <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>, modified.
-        <a href="./assets/game-boy/ATTRIBUTION.md">Model notice</a> ·
-        <a href="./third-party/gen1recomp-LICENSE.md">Source notice</a> ·
-        <a href="./third-party/DramaticShapeVoxelMod-LICENSE.txt">Voxel notice</a> ·
-        <a href="./third-party/runtime/THIRD_PARTY_NOTICES.md">Code notices</a>
-      </p>
-    </footer>
-
     <div id="drag-overlay" class="drag-overlay" aria-hidden="true"><strong>INSERT CARTRIDGE</strong></div>
+    <dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title">
+      <div class="help-dialog__panel">
+        <header class="help-dialog__header">
+          <div>
+            <p>Pocket Voxel</p>
+            <h2 id="help-title">Controls</h2>
+          </div>
+          <form method="dialog">
+            <button
+              id="help-close"
+              class="help-dialog__close"
+              value="close"
+              autofocus
+              aria-label="Close controls help"
+            >
+              <span aria-hidden="true"></span>
+            </button>
+          </form>
+        </header>
+        <dl class="help-controls">
+          <div><dt>Move</dt><dd><kbd>Arrows</kbd><span>or</span><kbd>W A S D</kbd></dd></div>
+          <div><dt>A</dt><dd><kbd>Z</kbd><span>or</span><kbd>J</kbd></dd></div>
+          <div><dt>B / Back</dt><dd><kbd>X</kbd><kbd>K</kbd><kbd>Esc</kbd></dd></div>
+          <div><dt>Start</dt><dd><kbd>Enter</kbd></dd></div>
+          <div><dt>Select</dt><dd><kbd>Shift</kbd></dd></div>
+          <div><dt>Gamepad</dt><dd>Standard layout</dd></div>
+        </dl>
+        <p class="help-dialog__note">
+          You can also press the controls on the handheld. Turn on Rotate in the toolbar to
+          drag empty space and orbit the model.
+        </p>
+      </div>
+    </dialog>
+    <dialog id="credits-dialog" class="help-dialog credits-dialog" aria-labelledby="credits-title">
+      <div class="help-dialog__panel">
+        <header class="help-dialog__header">
+          <div>
+            <p>Pocket Voxel</p>
+            <h2 id="credits-title">Credits</h2>
+          </div>
+          <form method="dialog">
+            <button
+              id="credits-close"
+              class="help-dialog__close"
+              value="close"
+              autofocus
+              aria-label="Close credits"
+            >
+              <span aria-hidden="true"></span>
+            </button>
+          </form>
+        </header>
+        <div class="credits-list">
+          <section>
+            <h3>Game Boy model</h3>
+            <p>
+              <a href="https://sketchfab.com/3d-models/gameboy-dmg-01-29849a15fe0a40a6a18e01c9d544a0ed">“GameBoy DMG-01” by Let's Do 3D</a>,
+              licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> and modified for Pocket Voxel.
+              <a href="./assets/game-boy/ATTRIBUTION.md">Model notice</a>
+            </p>
+          </section>
+          <section>
+            <h3>Software</h3>
+            <p>
+              <a href="./third-party/gen1recomp-LICENSE.md">gen1recomp notice</a>
+              <a href="./third-party/DramaticShapeVoxelMod-LICENSE.txt">DramaticShapeVoxelMod notice</a>
+              <a href="./third-party/runtime/THIRD_PARTY_NOTICES.md">Runtime notices</a>
+            </p>
+          </section>
+        </div>
+      </div>
+    </dialog>
     <p id="live-status" class="sr-only" aria-live="polite"></p>
     <script type="module" src="./main.js"></script>
   </body>

@@ -14,7 +14,7 @@
     "window_size": [480, 272]
   },
   "view": {
-    "desk_position_mm": [0, 10, 285],
+    "desk_position_mm": [0, 10, 315],
     "desk_target_mm": [0, 0, 0],
     "focus_distance_mm": 105,
     "fov_y_degrees": 28
@@ -26,14 +26,14 @@
   },
   "suppressed_materials": [],
   "parts": [
-    { "name": "screen", "center_mm": [0, 33, 13], "half_extents_mm": [27, 16, 2] },
-    { "name": "dpad_up", "button": "up", "center_mm": [-24, -6, 14], "half_extents_mm": [6, 7, 4] },
-    { "name": "dpad_down", "button": "down", "center_mm": [-24, -22, 14], "half_extents_mm": [6, 7, 4] },
-    { "name": "dpad_left", "button": "left", "center_mm": [-32, -14, 14], "half_extents_mm": [7, 6, 4] },
-    { "name": "dpad_right", "button": "right", "center_mm": [-16, -14, 14], "half_extents_mm": [7, 6, 4] },
-    { "name": "button_b", "button": "cross", "center_mm": [17, -24, 11], "half_extents_mm": [7, 7, 4] },
-    { "name": "button_a", "button": "circle", "center_mm": [32, -15, 11], "half_extents_mm": [7, 7, 4] },
-    { "name": "button_select", "button": "select", "center_mm": [-6, -50, 13], "half_extents_mm": [6, 5, 4] },
-    { "name": "button_start", "button": "start", "center_mm": [6, -50, 13], "half_extents_mm": [6, 5, 4] }
+    { "name": "screen", "center_mm": [0, 33, 13], "half_extents_mm": [25, 23, 2] },
+    { "name": "dpad_up", "button": "up", "center_mm": [-28, -20, 15], "half_extents_mm": [6, 7, 4] },
+    { "name": "dpad_down", "button": "down", "center_mm": [-28, -36, 15], "half_extents_mm": [6, 7, 4] },
+    { "name": "dpad_left", "button": "left", "center_mm": [-36, -28, 15], "half_extents_mm": [7, 6, 4] },
+    { "name": "dpad_right", "button": "right", "center_mm": [-20, -28, 15], "half_extents_mm": [7, 6, 4] },
+    { "name": "button_b", "button": "cross", "center_mm": [19, -31, 15], "half_extents_mm": [7, 7, 4] },
+    { "name": "button_a", "button": "circle", "center_mm": [33, -24, 15], "half_extents_mm": [7, 7, 4] },
+    { "name": "button_select", "button": "select", "center_mm": [-13, -50, 15], "half_extents_mm": [7, 5, 4] },
+    { "name": "button_start", "button": "start", "center_mm": [1, -50, 15], "half_extents_mm": [7, 5, 4] }
   ]
 }

@@ -1,0 +1,126 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  xmlns:xlink="http://www.w3.org/1999/xlink"
+  width="1200"
+  height="630"
+  viewBox="0 0 1200 630"
+  role="img"
+  aria-labelledby="title description"
+>
+  <title id="title">Pocket Voxel</title>
+  <desc id="description">A voxelized Game Boy runtime for Web, PSP, and PS Vita.</desc>
+
+  <!--
+    Editable source for the Pocket Voxel social preview.
+    The device image is a deterministic render of game-boy/gameboy-stage.glb.
+  -->
+  <defs>
+    <linearGradient id="background" x1="48" y1="24" x2="1122" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#03060D" />
+      <stop offset="0.54" stop-color="#07111C" />
+      <stop offset="1" stop-color="#12202B" />
+    </linearGradient>
+    <radialGradient id="mintGlow" cx="0" cy="0" r="1" gradientTransform="translate(1075 72) rotate(137) scale(438 352)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#77DEB8" stop-opacity="0.34" />
+      <stop offset="1" stop-color="#77DEB8" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="roseGlow" cx="0" cy="0" r="1" gradientTransform="translate(838 586) rotate(-76) scale(302 454)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EF83B8" stop-opacity="0.24" />
+      <stop offset="1" stop-color="#EF83B8" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="logoEdge" x1="2" y1="6" x2="30" y2="26" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EEF6FF" />
+      <stop offset="0.38" stop-color="#B7C8E2" />
+      <stop offset="0.58" stop-color="#7487A0" />
+      <stop offset="0.78" stop-color="#AEC0D6" />
+      <stop offset="1" stop-color="#DBE8F6" />
+    </linearGradient>
+    <linearGradient id="artFade" x1="596" y1="315" x2="860" y2="315" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#000000" />
+      <stop offset="1" stop-color="#FFFFFF" />
+    </linearGradient>
+    <linearGradient id="lowerFade" x1="884" y1="482" x2="884" y2="610" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" />
+      <stop offset="1" stop-color="#000000" />
+    </linearGradient>
+    <mask id="deviceMask" maskUnits="userSpaceOnUse" x="580" y="32" width="588" height="566">
+      <rect x="580" y="32" width="588" height="566" rx="32" fill="url(#artFade)" />
+      <rect x="760" y="32" width="408" height="566" rx="32" fill="url(#lowerFade)" opacity="0.18" />
+    </mask>
+    <clipPath id="cardClip">
+      <rect x="32" y="32" width="1136" height="566" rx="36" />
+    </clipPath>
+    <filter id="softShadow" x="-35%" y="-35%" width="170%" height="170%">
+      <feGaussianBlur stdDeviation="18" />
+    </filter>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#background)" />
+  <circle cx="1075" cy="72" r="438" fill="url(#mintGlow)" />
+  <circle cx="838" cy="586" r="330" fill="url(#roseGlow)" />
+
+  <g clip-path="url(#cardClip)">
+    <rect x="32" y="32" width="1136" height="566" rx="36" fill="#07101A" fill-opacity="0.84" />
+    <rect x="32" y="32" width="1136" height="566" rx="36" fill="none" stroke="#26374A" stroke-width="2" />
+
+    <g mask="url(#deviceMask)">
+      <image
+        x="566"
+        y="-18"
+        width="700"
+        height="700"
+        preserveAspectRatio="xMidYMid slice"
+        xlink:href="og-gameboy.jpg"
+      />
+    </g>
+
+    <rect x="32" y="32" width="670" height="566" fill="url(#background)" opacity="0.42" />
+    <path d="M32 519H615" stroke="#1E3140" stroke-width="1" />
+  </g>
+
+  <!-- Pocket Voxel mark, enlarged from the site's canonical favicon. -->
+  <g transform="translate(86 78) scale(2.25)">
+    <rect width="32" height="32" rx="7" fill="#080B11" />
+    <rect x="2" y="6" width="28" height="20" rx="6" fill="none" stroke="url(#logoEdge)" stroke-width="2.6" stroke-linejoin="round" />
+    <path d="M16 9.4 22.3 12.9 16 16.4 9.7 12.9 16 9.4Z" fill="#9DE5C7" />
+    <path d="M9.7 12.9 16 16.4v6.8l-6.3-3.5v-6.8Z" fill="#5E7183" />
+    <path d="M22.3 12.9 16 16.4v6.8l6.3-3.5v-6.8Z" fill="#D8E1EC" />
+  </g>
+
+  <text x="184" y="123" fill="#D9E5F5" font-family="Helvetica, Arial, sans-serif" font-size="24" font-weight="700" letter-spacing="0.2">Pocket Voxel</text>
+  <text x="184" y="151" fill="#7F92A8" font-family="Andale Mono, Menlo, monospace" font-size="13" letter-spacing="1.6">VOXEL RUNTIME</text>
+
+  <text x="86" y="268" fill="#F3F7FC" font-family="Helvetica, Arial, sans-serif" font-size="68" font-weight="700" letter-spacing="-2.8">Pocket Voxel</text>
+  <text x="90" y="318" fill="#B8C7D9" font-family="Helvetica, Arial, sans-serif" font-size="25" font-weight="400">A voxelized Game Boy runtime</text>
+  <text x="90" y="353" fill="#B8C7D9" font-family="Helvetica, Arial, sans-serif" font-size="25" font-weight="400">for Web, PSP, and PS Vita.</text>
+
+  <g transform="translate(88 409)">
+    <rect width="82" height="42" rx="21" fill="#10231F" stroke="#4D8D77" />
+    <circle cx="21" cy="21" r="4" fill="#9DE5C7" />
+    <text x="34" y="27" fill="#CFEDE1" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="700">Web</text>
+  </g>
+  <g transform="translate(182 409)">
+    <rect width="83" height="42" rx="21" fill="#121B28" stroke="#405672" />
+    <circle cx="21" cy="21" r="4" fill="#AEC0D6" />
+    <text x="34" y="27" fill="#D7E0EC" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="700">PSP</text>
+  </g>
+  <g transform="translate(277 409)">
+    <rect width="106" height="42" rx="21" fill="#261723" stroke="#784460" />
+    <circle cx="21" cy="21" r="4" fill="#EF83B8" />
+    <text x="34" y="27" fill="#F4D3E4" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="700">PS Vita</text>
+  </g>
+
+  <g opacity="0.95">
+    <rect x="90" y="548" width="8" height="8" rx="1" fill="#9DE5C7" />
+    <rect x="103" y="548" width="8" height="8" rx="1" fill="#6D8297" />
+    <rect x="90" y="561" width="8" height="8" rx="1" fill="#EF83B8" />
+    <rect x="103" y="561" width="8" height="8" rx="1" fill="#D8E1EC" />
+  </g>
+  <text x="128" y="564" fill="#91A2B7" font-family="Andale Mono, Menlo, monospace" font-size="17" letter-spacing="0.6">pocketvoxel.games</text>
+
+  <g opacity="0.56">
+    <rect x="1096" y="72" width="9" height="9" rx="1" fill="#9DE5C7" />
+    <rect x="1111" y="72" width="9" height="9" rx="1" fill="#71869D" />
+    <rect x="1126" y="72" width="9" height="9" rx="1" fill="#EF83B8" />
+  </g>
+</svg>

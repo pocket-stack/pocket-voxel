@@ -48,6 +48,7 @@ export interface GameBoyStageOptions {
   canvas: HTMLCanvasElement;
   framebuffer: HTMLCanvasElement;
   input: InputMux;
+  initialRotationEnabled?: boolean;
   onScreenActivate: () => void;
   onError: (error: Error) => void;
 }
@@ -55,6 +56,8 @@ export interface GameBoyStageOptions {
 export interface GameBoyStage {
   readonly canvas: HTMLCanvasElement;
   blit(): void;
+  releaseInput(): void;
+  setRotationEnabled(enabled: boolean): void;
   setScreenActionEnabled(enabled: boolean): void;
   setRuntimeReady(ready: boolean): void;
   destroy(): void;
@@ -218,9 +221,17 @@ export async function mountGameBoyStage(options: GameBoyStageOptions): Promise<G
   let inViewport = true;
   let destroyed = false;
   let screenActionEnabled = true;
+  let rotationEnabled = options.initialRotationEnabled ?? true;
   let stageWidthMm = 90;
   let authoredCameraRadius = camera.position.distanceTo(controls.target);
   const pressed = new Map<number, PressedPart>();
+
+  const syncControlsEnabled = () => {
+    controls.enabled = rotationEnabled && pressed.size === 0;
+    root.dataset.rotationEnabled = String(rotationEnabled);
+    canvas.classList.toggle("is-rotation-locked", !rotationEnabled);
+  };
+  syncControlsEnabled();
 
   const renderNow = () => {
     renderRaf = 0;
@@ -276,7 +287,7 @@ export async function mountGameBoyStage(options: GameBoyStageOptions): Promise<G
     if (active.releaseTimer !== undefined) window.clearTimeout(active.releaseTimer);
     pressed.delete(pointerId);
     input.clearSource(active.source);
-    controls.enabled = pressed.size === 0;
+    syncControlsEnabled();
     updatePressedReceipt();
   };
   const release = (event: PointerEvent, immediate = false) => {
@@ -309,7 +320,7 @@ export async function mountGameBoyStage(options: GameBoyStageOptions): Promise<G
     clearPress(event.pointerId);
     pressed.set(event.pointerId, { button, source, startedAt: performance.now() });
     input.set(source, button, true);
-    controls.enabled = false;
+    syncControlsEnabled();
     canvas.setPointerCapture(event.pointerId);
     updatePressedReceipt();
   };
@@ -318,7 +329,9 @@ export async function mountGameBoyStage(options: GameBoyStageOptions): Promise<G
   const onLostPointerCapture = (event: PointerEvent) => release(event, true);
   const onPointerMove = (event: PointerEvent) => {
     const part = pick(event);
-    canvas.style.cursor = part?.button || (part?.name === "screen" && screenActionEnabled) ? "pointer" : "grab";
+    canvas.style.cursor = part?.button || (part?.name === "screen" && screenActionEnabled)
+      ? "pointer"
+      : rotationEnabled ? "grab" : "default";
   };
   canvas.addEventListener("pointerdown", onPointerDown, true);
   canvas.addEventListener("pointerup", onPointerUp, true);
@@ -396,6 +409,8 @@ export async function mountGameBoyStage(options: GameBoyStageOptions): Promise<G
     loadedModel = model.scene;
     const canonical = canonicalizeModel(model.scene, profile);
     scene.add(canonical);
+    const canonicalBounds = new THREE.Box3().setFromObject(canonical);
+    floor.position.y = canonicalBounds.min.y - 0.8;
     bindScreen(canonical, profile, texture);
     proxyGroup = buildPickProxies(profile);
     scene.add(proxyGroup);
@@ -420,6 +435,15 @@ export async function mountGameBoyStage(options: GameBoyStageOptions): Promise<G
       texture.needsUpdate = true;
       invalidate();
     },
+    releaseInput() {
+      clearAllPresses();
+    },
+    setRotationEnabled(enabled: boolean) {
+      rotationEnabled = enabled;
+      syncControlsEnabled();
+      canvas.style.cursor = enabled ? "grab" : "default";
+      invalidate();
+    },
     setScreenActionEnabled(enabled: boolean) {
       screenActionEnabled = enabled;
     },
@@ -437,6 +461,8 @@ export async function mountGameBoyStage(options: GameBoyStageOptions): Promise<G
     stageFrames: renderCount,
     screenFrames,
     inputMask: input.mask,
+    rotationEnabled,
+    cameraPosition: camera.position.toArray(),
     pressedPart: root.dataset.pressedPart || null,
     controlPoints: Object.fromEntries((proxyGroup?.children ?? []).flatMap((child) => {
       const part = child.userData.stagePart as StagePart | undefined;

@@ -14,15 +14,18 @@
     "web:build": "bun web/scripts/build.ts",
     "web:serve": "bun web/scripts/serve.ts",
     "web:smoke": "bun web/scripts/smoke-wasm.ts",
+    "web:smoke:packages": "bun web/scripts/smoke-packager.ts",
+    "web:deploy": "bun run web:build && wrangler deploy",
     "web:e2e": "bun web/scripts/e2e-chrome.ts",
     "e2e": "bun tests/e2e/voxel-ppsspp.ts",
     "test": "bun test tests/",
-    "tsc": "bunx tsc --noEmit -p ."
+    "tsc": "bunx tsc --noEmit -p . && bunx tsc --noEmit -p worker/tsconfig.json"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
     "@types/three": "^0.185.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "wrangler": "4.120.1"
   },
   "dependencies": {
     "three": "^0.185.1"

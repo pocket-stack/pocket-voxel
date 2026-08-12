@@ -57,6 +57,9 @@ const mime: Record<string, string> = {
   ".json": "application/json; charset=utf-8",
   ".wasm": "application/wasm",
   ".glb": "model/gltf-binary",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".xml": "application/xml; charset=utf-8",
   ".md": "text/markdown; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
   ".map": "application/json; charset=utf-8",
@@ -278,10 +281,253 @@ try {
       })()`,
     20_000,
   );
-  await evaluate(
+
+  for (const size of [
+    { width: 1440, height: 900 },
+    { width: 1280, height: 720 },
+    { width: 390, height: 844 },
+    { width: 375, height: 667 },
+    { width: 844, height: 390 },
+    { width: 568, height: 320 },
+    { width: 320, height: 568 },
+  ]) {
+    await cdp.send("Emulation.setDeviceMetricsOverride", {
+      ...size,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await evaluate(cdp, `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+    const layouts = (await evaluate(
+      cdp,
+      `(() => {
+        const measure = () => {
+          const root = document.documentElement;
+          const topbar = document.getElementById("topbar").getBoundingClientRect();
+          const brand = document.querySelector(".brand").getBoundingClientRect();
+          const modes = document.querySelector(".mode-controls").getBoundingClientRect();
+          const menuToggle = document.getElementById("mobile-tools-toggle").getBoundingClientRect();
+          const stage = document.getElementById("stage-viewport").getBoundingClientRect();
+          const action = document.querySelector(".action-dock").getBoundingClientRect();
+          return {
+            clientWidth:root.clientWidth,
+            clientHeight:root.clientHeight,
+            scrollWidth:root.scrollWidth,
+            scrollHeight:root.scrollHeight,
+            topbar:{top:topbar.top,bottom:topbar.bottom,left:topbar.left,right:topbar.right},
+            brand:{top:brand.top,bottom:brand.bottom,left:brand.left,right:brand.right},
+            modes:{top:modes.top,bottom:modes.bottom,left:modes.left,right:modes.right},
+            menuToggle:{top:menuToggle.top,bottom:menuToggle.bottom,left:menuToggle.left,right:menuToggle.right},
+            stage:{top:stage.top,bottom:stage.bottom,left:stage.left,right:stage.right},
+            action:{top:action.top,bottom:action.bottom,left:action.left,right:action.right},
+          };
+        };
+        const web = document.getElementById("mode-web");
+        const homebrew = document.getElementById("mode-homebrew");
+        web.click();
+        const webLayout = measure();
+        homebrew.click();
+        const homebrewLayout = measure();
+        web.click();
+        return {web:webLayout,homebrew:homebrewLayout};
+      })()`,
+    )) as Record<"web" | "homebrew", {
+      clientWidth: number;
+      clientHeight: number;
+      scrollWidth: number;
+      scrollHeight: number;
+      topbar: { top: number; bottom: number; left: number; right: number };
+      brand: { top: number; bottom: number; left: number; right: number };
+      modes: { top: number; bottom: number; left: number; right: number };
+      menuToggle: { top: number; bottom: number; left: number; right: number };
+      stage: { top: number; bottom: number; left: number; right: number };
+      action: { top: number; bottom: number; left: number; right: number };
+    }>;
+    for (const [mode, layout] of Object.entries(layouts)) {
+      const oneScreen =
+        layout.scrollWidth <= layout.clientWidth + 1 &&
+        layout.scrollHeight <= layout.clientHeight + 1 &&
+        layout.topbar.top >= -1 &&
+        layout.topbar.bottom <= layout.clientHeight + 1 &&
+        layout.modes.top >= layout.topbar.top - 1 &&
+        layout.modes.bottom <= layout.topbar.bottom + 1 &&
+        layout.modes.left >= layout.topbar.left - 1 &&
+        layout.modes.right <= layout.topbar.right + 1 &&
+        (size.width > 780 || (
+          layout.topbar.bottom - layout.topbar.top <= 51 &&
+          layout.brand.right <= layout.modes.left + 1 &&
+          layout.modes.right <= layout.menuToggle.left + 1 &&
+          layout.menuToggle.right <= layout.topbar.right + 1
+        )) &&
+        layout.stage.top >= layout.topbar.bottom - 1 &&
+        layout.stage.bottom <= layout.action.top + 1 &&
+        layout.action.bottom <= layout.clientHeight + 1 &&
+        layout.topbar.left >= -1 &&
+        layout.topbar.right <= layout.clientWidth + 1 &&
+        layout.stage.left >= -1 &&
+        layout.stage.right <= layout.clientWidth + 1 &&
+        layout.action.left >= -1 &&
+        layout.action.right <= layout.clientWidth + 1;
+      if (!oneScreen) {
+        throw new Error(`page is not one-screen in ${mode} mode at ${size.width}x${size.height}: ${JSON.stringify(layout)}`);
+      }
+    }
+  }
+
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: viewportWidth,
+    height: viewportHeight,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await evaluate(cdp, `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+
+  const modeReceipt = await evaluate(
     cdp,
-    `document.querySelector("[data-stage-viewport]").scrollIntoView({block:"center", inline:"center"})`,
+    `(() => {
+      const web = document.getElementById("mode-web");
+      const homebrew = document.getElementById("mode-homebrew");
+      const targets = document.getElementById("native-target-options");
+      homebrew.click();
+      const homebrewVisible = !targets.hidden && document.body.dataset.mode === "homebrew";
+      document.getElementById("target-vita").click();
+      const vitaSelected = document.getElementById("target-vita").checked;
+      web.click();
+      return {
+        homebrewVisible,
+        vitaSelected,
+        webRestored:web.checked && targets.hidden && document.body.dataset.mode === "web",
+      };
+    })()`,
+  ) as { homebrewVisible: boolean; vitaSelected: boolean; webRestored: boolean };
+  if (!modeReceipt.homebrewVisible || !modeReceipt.vitaSelected || !modeReceipt.webRestored) {
+    throw new Error(`mode switch failed: ${JSON.stringify(modeReceipt)}`);
+  }
+
+  const rotationOffReceipt = await evaluate(
+    cdp,
+    `(() => {
+      const rotation = document.getElementById("rotation-toggle");
+      if (rotation.checked) rotation.click();
+      return {
+        checked:rotation.checked,
+        stored:localStorage.getItem("pocket-voxel:rotation-enabled"),
+        stage:globalThis.__pocketVoxelStageReceipt().rotationEnabled,
+      };
+    })()`,
+  ) as { checked: boolean; stored: string | null; stage: boolean };
+  if (rotationOffReceipt.checked || rotationOffReceipt.stored !== "false" || rotationOffReceipt.stage) {
+    throw new Error(`rotation preference did not persist off: ${JSON.stringify(rotationOffReceipt)}`);
+  }
+
+  const reloaded = cdp.once("Page.loadEventFired");
+  await cdp.send("Page.reload", { ignoreCache: true });
+  await reloaded;
+  await waitUntil(
+    cdp,
+    `typeof globalThis.__pocketVoxelStageReceipt === "function" &&
+      globalThis.__pocketVoxelStageReceipt().modelReady === true`,
+    20_000,
   );
+  const rotationRestoredReceipt = await evaluate(
+    cdp,
+    `(() => {
+      const rotation = document.getElementById("rotation-toggle");
+      const restored = !rotation.checked && globalThis.__pocketVoxelStageReceipt().rotationEnabled === false;
+      rotation.click();
+      return {
+        restored,
+        checked:rotation.checked,
+        stored:localStorage.getItem("pocket-voxel:rotation-enabled"),
+        stage:globalThis.__pocketVoxelStageReceipt().rotationEnabled,
+      };
+    })()`,
+  ) as { restored: boolean; checked: boolean; stored: string | null; stage: boolean };
+  if (
+    !rotationRestoredReceipt.restored ||
+    !rotationRestoredReceipt.checked ||
+    rotationRestoredReceipt.stored !== "true" ||
+    !rotationRestoredReceipt.stage
+  ) {
+    throw new Error(`rotation preference did not survive reload: ${JSON.stringify(rotationRestoredReceipt)}`);
+  }
+
+  const toolbarReceipt = await evaluate(
+    cdp,
+    `(async () => {
+      const help = document.getElementById("help-dialog");
+      const credits = document.getElementById("credits-dialog");
+      document.getElementById("help-open").click();
+      const helpOpen = help.open;
+      const helpButton = document.getElementById("help-close").getBoundingClientRect();
+      const helpMark = document.querySelector("#help-close span").getBoundingClientRect();
+      const helpCloseCentered = Math.abs((helpButton.left + helpButton.width / 2) - (helpMark.left + helpMark.width / 2)) <= .5 &&
+        Math.abs((helpButton.top + helpButton.height / 2) - (helpMark.top + helpMark.height / 2)) <= .5;
+      help.close();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const helpFocusReturned = document.activeElement === document.getElementById("help-open");
+      document.getElementById("credits-open").click();
+      const creditsOpen = credits.open;
+      const creditsButton = document.getElementById("credits-close").getBoundingClientRect();
+      const creditsMark = document.querySelector("#credits-close span").getBoundingClientRect();
+      const creditsCloseCentered = Math.abs((creditsButton.left + creditsButton.width / 2) - (creditsMark.left + creditsMark.width / 2)) <= .5 &&
+        Math.abs((creditsButton.top + creditsButton.height / 2) - (creditsMark.top + creditsMark.height / 2)) <= .5;
+      credits.close();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const creditsFocusReturned = document.activeElement === document.getElementById("credits-open");
+      return {helpOpen,helpCloseCentered,helpFocusReturned,creditsOpen,creditsCloseCentered,creditsFocusReturned};
+    })()`,
+  ) as Record<string, boolean>;
+  if (Object.values(toolbarReceipt).some((value) => !value)) {
+    throw new Error(`toolbar controls failed: ${JSON.stringify(toolbarReceipt)}`);
+  }
+
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: 320,
+    height: 568,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await evaluate(cdp, `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+  const mobileMenuReceipt = await evaluate(
+    cdp,
+    `(async () => {
+      const shell = document.getElementById("mobile-tools");
+      const toggle = document.getElementById("mobile-tools-toggle");
+      const panel = document.getElementById("mobile-tools-panel");
+      const topbar = document.getElementById("topbar").getBoundingClientRect();
+      const before = getComputedStyle(panel).display === "none" && toggle.getAttribute("aria-expanded") === "false";
+      toggle.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const bounds = panel.getBoundingClientRect();
+      const opened = shell.classList.contains("is-open") &&
+        toggle.getAttribute("aria-expanded") === "true" &&
+        getComputedStyle(panel).display !== "none" &&
+        bounds.left >= -1 && bounds.right <= document.documentElement.clientWidth + 1 &&
+        bounds.top >= topbar.bottom - 1;
+      panel.querySelector("#help-open").click();
+      const dialogOpened = document.getElementById("help-dialog").open && !shell.classList.contains("is-open");
+      document.getElementById("help-dialog").close();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const dialogFocusReturned = document.activeElement === toggle;
+      toggle.click();
+      toggle.focus();
+      document.dispatchEvent(new KeyboardEvent("keydown", {key:"Escape", bubbles:true}));
+      const escaped = !shell.classList.contains("is-open") &&
+        toggle.getAttribute("aria-expanded") === "false" && document.activeElement === toggle;
+      return {before,opened,dialogOpened,dialogFocusReturned,escaped};
+    })()`,
+  ) as Record<string, boolean>;
+  if (Object.values(mobileMenuReceipt).some((value) => !value)) {
+    throw new Error(`mobile tools menu failed: ${JSON.stringify(mobileMenuReceipt)}`);
+  }
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: viewportWidth,
+    height: viewportHeight,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await evaluate(cdp, `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+
   await waitUntil(cdp, `globalThis.__pocketVoxelStageReceipt().stageFrames > 0`, 5_000);
 
   if (viewportWidth >= 600) {
@@ -360,7 +606,7 @@ try {
   const focused = await evaluate(
     cdp,
     `(() => {
-      const canvas = document.querySelector("canvas:not(#screen)");
+      const canvas = document.getElementById("stage-canvas");
       canvas?.focus();
       return canvas instanceof HTMLCanvasElement && document.activeElement === canvas;
     })()`,
@@ -480,6 +726,7 @@ try {
     "/cook.worker.js",
     "/generated/pocketvoxel_wasm.js",
     "/generated/pocketvoxel_wasm_bg.wasm",
+    "/favicon.svg",
     "/assets/game-boy/profile.json",
     stageModelPath,
   ]) {
@@ -488,6 +735,11 @@ try {
   if (responseTypes.get(stageModelPath) !== "model/gltf-binary") {
     throw new Error(
       `Game Boy model used ${responseTypes.get(stageModelPath) ?? "no"} MIME type; expected model/gltf-binary`,
+    );
+  }
+  if (responseTypes.get("/favicon.svg") !== "image/svg+xml") {
+    throw new Error(
+      `favicon used ${responseTypes.get("/favicon.svg") ?? "no"} MIME type; expected image/svg+xml`,
     );
   }
   const unsafeRequests = requests.filter((request) => {

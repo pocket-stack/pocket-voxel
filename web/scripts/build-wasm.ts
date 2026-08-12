@@ -7,9 +7,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const target = resolve(root, "target/wasm32-unknown-unknown/release/pocketvoxel_wasm.wasm");
 const out = resolve(root, "web/generated");
 const bindgenVersion = "0.2.126";
+const sourceHome = process.env.HOME ? resolve(process.env.HOME) : dirname(dirname(root));
 
 function run(command: string[], cwd = root, env?: Record<string, string | undefined>): void {
   const proc = Bun.spawnSync(command, { cwd, env, stdout: "inherit", stderr: "inherit" });
@@ -53,35 +53,50 @@ if (version.exitCode !== 0 || version.stdout.toString().trim() !== `wasm-bindgen
 }
 
 const cargo = cargoInvocation();
-run([
-  ...cargo.command,
-  "build",
-  "--release",
-  "--target",
-  "wasm32-unknown-unknown",
-  "-p",
-  "pocketvoxel-wasm",
-], root, cargo.env);
-if (!existsSync(target)) {
-  console.error(`Pocket Voxel wasm: build succeeded but ${target} is missing`);
-  process.exit(1);
-}
-
+const cargoEnv = {
+  ...process.env,
+  ...cargo.env,
+  RUSTFLAGS: [
+    process.env.RUSTFLAGS ?? "",
+    `--remap-path-prefix=${sourceHome}=/source/home`,
+    `--remap-path-prefix=${root}=/source/pocket-voxel`,
+  ].filter(Boolean).join(" "),
+};
 mkdirSync(out, { recursive: true });
-run([
-  "wasm-bindgen",
-  target,
-  "--target",
-  "web",
-  "--out-dir",
-  out,
-  "--out-name",
-  "pocketvoxel_wasm",
-]);
-
-const wasm = resolve(out, "pocketvoxel_wasm_bg.wasm");
-const size = Bun.file(wasm).size;
-console.log(
-  `Pocket Voxel wasm: web/generated/pocketvoxel_wasm.js + ` +
-    `pocketvoxel_wasm_bg.wasm (${(size / 1024).toFixed(1)} KiB)`,
-);
+for (const build of [
+  { crate: "pocketvoxel-wasm", output: "pocketvoxel_wasm" },
+  { crate: "pocketvoxel-packager-wasm", output: "pocketvoxel_packager_wasm" },
+] as const) {
+  const target = resolve(
+    root,
+    `target/wasm32-unknown-unknown/release/${build.output}.wasm`,
+  );
+  run([
+    ...cargo.command,
+    "build",
+    "--release",
+    "--target",
+    "wasm32-unknown-unknown",
+    "-p",
+    build.crate,
+  ], root, cargoEnv);
+  if (!existsSync(target)) {
+    console.error(`Pocket Voxel wasm: build succeeded but ${target} is missing`);
+    process.exit(1);
+  }
+  run([
+    "wasm-bindgen",
+    target,
+    "--target",
+    "web",
+    "--out-dir",
+    out,
+    "--out-name",
+    build.output,
+  ]);
+  const wasm = resolve(out, `${build.output}_bg.wasm`);
+  console.log(
+    `Pocket Voxel wasm: web/generated/${build.output}.js + ` +
+      `${build.output}_bg.wasm (${(Bun.file(wasm).size / 1024).toFixed(1)} KiB)`,
+  );
+}

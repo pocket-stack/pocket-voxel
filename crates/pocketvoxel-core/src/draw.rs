@@ -441,9 +441,8 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
     // where the bake is exact: field play at the rung-2 REST pitch, the
     // projection it was cooked at. A battle rig, another pitch rung or a
     // live tween falls back to full geometry: slower, never wrong.
-    let bake_ok = !scene.battle.active
-        && scene.pitch_rung == 2
-        && scene.pitch_t >= spec::PITCH_TWEEN_TICKS;
+    let bake_ok =
+        !scene.battle.active && scene.pitch_rung == 2 && scene.pitch_t >= spec::PITCH_TWEEN_TICKS;
     let baked = |v: &Visible<'_>| -> bool {
         bake_ok
             && v.chunk.bake_page != spec::BAKE_PAGE_NONE
@@ -532,16 +531,17 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
                 }
                 let before = items.len();
                 push_mesh(items, v, kind, pull, bias);
-                if thin && items.len() > before {
-                    if let Some(Item::ChunkMesh { mesh, .. }) = items.last_mut() {
-                        let quads = mesh.index_count as u32 / 6;
-                        let keep = quads.div_ceil(density);
-                        mesh.index_count = (keep * 6) as u16;
-                        // The prefix indices only reference the prefix
-                        // vertices (evens pack first), so the geometric
-                        // restage path shrinks with it.
-                        mesh.vert_count = (keep * 4) as u16;
-                    }
+                if thin
+                    && items.len() > before
+                    && let Some(Item::ChunkMesh { mesh, .. }) = items.last_mut()
+                {
+                    let quads = mesh.index_count as u32 / 6;
+                    let keep = quads.div_ceil(density);
+                    mesh.index_count = (keep * 6) as u16;
+                    // The prefix indices only reference the prefix
+                    // vertices (evens pack first), so the geometric
+                    // restage path shrinks with it.
+                    mesh.vert_count = (keep * 4) as u16;
                 }
             }
         };
@@ -1001,8 +1001,16 @@ mod tests {
             empty,
             empty,
             quad(8, -120, 24, -104),
-            if tree_lod { quad(8, -120, 24, -104) } else { empty },
-            if tree_lod { quad(8, -120, 24, -104) } else { empty },
+            if tree_lod {
+                quad(8, -120, 24, -104)
+            } else {
+                empty
+            },
+            if tree_lod {
+                quad(8, -120, 24, -104)
+            } else {
+                empty
+            },
             empty,
             quad(0, -128, 64, -64),
             quad(64, -64, 128, 0),
@@ -1012,8 +1020,16 @@ mod tests {
             empty,
             empty,
             quad(8, -376, 24, -360),
-            if tree_lod { quad(8, -376, 24, -360) } else { empty },
-            if tree_lod { quad(8, -376, 24, -360) } else { empty },
+            if tree_lod {
+                quad(8, -376, 24, -360)
+            } else {
+                empty
+            },
+            if tree_lod {
+                quad(8, -376, 24, -360)
+            } else {
+                empty
+            },
             empty,
             quad(0, -384, 64, -320),
             quad(64, -320, 128, -256),
@@ -1055,7 +1071,11 @@ mod tests {
         let count = |v: &[(u16, u32)], kind: u16| v.iter().filter(|(k, _)| *k == kind).count();
 
         let top = kinds(spec::quality_tier::DESKTOP);
-        assert_eq!(count(&top, mesh_kind::TERRAIN), 3, "all three chunks in view");
+        assert_eq!(
+            count(&top, mesh_kind::TERRAIN),
+            3,
+            "all three chunks in view"
+        );
         assert_eq!(count(&top, mesh_kind::GRASS), 3, "top rung fades nothing");
         assert_eq!(count(&top, mesh_kind::FLOWER), 3);
 
@@ -1087,7 +1107,11 @@ mod tests {
             3,
             "every visible ring carves at 2x2"
         );
-        assert_eq!(count(&psp, mesh_kind::TREE_BOX), 0, "no moving box boundary");
+        assert_eq!(
+            count(&psp, mesh_kind::TREE_BOX),
+            0,
+            "no moving box boundary"
+        );
     }
 
     /// `QUALITY_OFF` means off: the half-extent widening lets even a 0 dial
@@ -1149,7 +1173,10 @@ mod tests {
                 ("flower", dials.flower_dist),
                 // The tree that matters is CARVED at some level — fine or
                 // coarse — never the box slab; the reach is their union.
-                ("carve reach", dials.tree_hull_dist.max(dials.tree_coarse_dist)),
+                (
+                    "carve reach",
+                    dials.tree_hull_dist.max(dials.tree_coarse_dist),
+                ),
             ] {
                 assert!(
                     within_dist(worst_dist2, half, limit),

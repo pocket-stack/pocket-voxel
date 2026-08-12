@@ -1,0 +1,13 @@
+[package]
+name = "pocketvoxel-packager-wasm"
+description = "Browser-local PSP and PS Vita package assembler for Pocket Voxel"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+miniz_oxide = "0.8.9"
+wasm-bindgen = "=0.2.126"

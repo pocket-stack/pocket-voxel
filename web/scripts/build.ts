@@ -19,9 +19,10 @@ rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, "generated"), { recursive: true });
 mkdirSync(join(out, "third-party"), { recursive: true });
 mkdirSync(join(out, "assets", "game-boy"), { recursive: true });
+mkdirSync(join(out, "platform"), { recursive: true });
 
 const result = await Bun.build({
-  entrypoints: [join(web, "main.ts"), join(web, "cook.worker.ts")],
+  entrypoints: [join(web, "main.ts"), join(web, "cook.worker.ts"), join(web, "export.worker.ts")],
   outdir: out,
   target: "browser",
   format: "esm",
@@ -34,11 +35,27 @@ if (!result.success) {
   process.exit(1);
 }
 
-for (const name of ["index.html", "styles.css", "audio-worklet.js"]) {
+for (const name of [
+  "index.html",
+  "styles.css",
+  "audio-worklet.js",
+  "favicon.svg",
+  "robots.txt",
+  "sitemap.xml",
+  "_headers",
+]) {
   cpSync(join(web, name), join(out, name));
 }
-for (const name of ["pocketvoxel_wasm.js", "pocketvoxel_wasm_bg.wasm"]) {
+for (const name of [
+  "pocketvoxel_wasm.js",
+  "pocketvoxel_wasm_bg.wasm",
+  "pocketvoxel_packager_wasm.js",
+  "pocketvoxel_packager_wasm_bg.wasm",
+]) {
   cpSync(join(web, "generated", name), join(out, "generated", name));
+}
+for (const name of ["manifest.json", "README.md", "THIRD_PARTY_NOTICES.txt", "psp", "vita"]) {
+  cpSync(join(web, "platform", name), join(out, "platform", name), { recursive: true });
 }
 cpSync(
   join(web, "reference", "gen1recomp-LICENSE.md"),
@@ -55,6 +72,7 @@ cpSync(join(web, "reference", "third-party"), join(out, "third-party", "runtime"
 for (const name of ["profile.json", "gameboy-stage.glb", "ATTRIBUTION.md"]) {
   cpSync(join(web, "assets", "game-boy", name), join(out, "assets", "game-boy", name));
 }
+cpSync(join(web, "assets", "og-image.png"), join(out, "assets", "og-image.png"));
 
 const forbidden = readdirSync(out, { recursive: true })
   .map(String)
