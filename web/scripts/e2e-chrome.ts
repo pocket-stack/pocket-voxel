@@ -603,6 +603,21 @@ try {
     throw new Error(`invalid rendered frame: ${JSON.stringify(frame)}`);
   }
 
+  const webResult = await evaluate(
+    cdp,
+    `(() => {
+      const result = document.getElementById("target-result");
+      return {
+        hidden: result?.hidden === true,
+        copy: document.getElementById("target-result-copy")?.textContent ?? "",
+        action: document.getElementById("target-action")?.textContent ?? "",
+      };
+    })()`,
+  ) as { hidden: boolean; copy: string; action: string };
+  if (!webResult.hidden || webResult.copy !== "" || webResult.action !== "") {
+    throw new Error(`live Web Player result UI was not cleared: ${JSON.stringify(webResult)}`);
+  }
+
   const focused = await evaluate(
     cdp,
     `(() => {
