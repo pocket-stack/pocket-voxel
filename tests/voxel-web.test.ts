@@ -375,7 +375,7 @@ describe("Pocket Voxel web pipeline UX", () => {
     const wrangler = await Bun.file("wrangler.jsonc").json();
     expect(wrangler.name).toBe("pocket-voxel-web");
     expect(wrangler.main).toBe("./worker/entry.ts");
-    expect(wrangler.compatibility_date).toBe("2026-08-11");
+    expect(wrangler.compatibility_date).toBe("2026-08-12");
     expect(wrangler.assets).toEqual({
       directory: "./dist/web",
       binding: "ASSETS",
