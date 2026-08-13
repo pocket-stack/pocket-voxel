@@ -1,9 +1,9 @@
 // voxelmon/cook/pak.ts — the VXPK writer.
 //
 // Byte-for-byte mirror of crates/pocketvoxel-core/src/
-// pak/builder.rs (the reader in ../pak.rs is the ground truth): META 32B,
+// pak/builder.rs (the reader in ../pak.rs is the ground truth): META 40B,
 // VPAL u16 count + 1024B palettes, ATLS u16 count + 16B headers +
-// 16-aligned swizzled blobs, CHNK header + 12B map dirs + 64B chunk records
+// 16-aligned swizzled blobs, CHNK header + 12B map dirs + 128B chunk records
 // + 16-aligned vert/index pools, STMP 16B records into the CHNK pools, CMAP
 // ascending u16 pairs, GAME raw JSON, AUDI 16B header + JSON + 16-aligned
 // program banks, VCOL 16B header + 8B map records + u16 page records;
@@ -16,6 +16,7 @@ import {
   MESH_KIND,
   VERTEX_STRIDE,
   VXPK_CHUNK_RECORD_SIZE,
+  VXPK_CHUNK_FLAG_BORDER_RING,
   VIEW_H,
   VIEW_W,
   VXPK_ALIGN,
@@ -198,6 +199,7 @@ export function writePak(input: PakInput): { bytes: Uint8Array; stats: PakStats 
     aabbMin: [number, number, number];
     aabbMax: [number, number, number];
     bakePage?: number;
+    flags: number;
     meshes: Range[];
   }
   const chunkRecs: { mapId: number; chunks: ChunkRec[] }[] = [];
@@ -218,12 +220,17 @@ export function writePak(input: PakInput): { bytes: Uint8Array; stats: PakStats 
       }
       meshes[MESH_KIND.terrainKeep] = appendMesh(c.meshes[MESH_KIND.terrainKeep]);
       meshes[MESH_KIND.groundBake] = appendMesh(c.meshes[MESH_KIND.groundBake]);
+      const flags = c.flags ?? 0;
+      if ((flags & ~VXPK_CHUNK_FLAG_BORDER_RING) !== 0) {
+        throw new Error(`chunk ${c.cx},${c.cy} has unknown flags 0x${flags.toString(16)}`);
+      }
       return {
         cx: c.cx,
         cy: c.cy,
         aabbMin: c.aabbMin,
         aabbMax: c.aabbMax,
         bakePage: c.bakePage,
+        flags,
         meshes,
       };
     });
@@ -320,7 +327,7 @@ export function writePak(input: PakInput): { bytes: Uint8Array; stats: PakStats 
       chnk.i16(c.cy);
       for (const v of [...c.aabbMin, ...c.aabbMax]) chnk.i16(v);
       chnk.u16(c.bakePage ?? BAKE_PAGE_NONE);
-      chnk.u16(0);
+      chnk.u16(c.flags);
       for (const r of c.meshes) writeRange(chnk, r);
     }
   }

@@ -69,6 +69,7 @@ fn build_pak() -> Vec<u8> {
             aabb_min: [0, 0, 0],
             aabb_max: [128, 0, 128],
             bake_page: pocketvoxel_core::spec::BAKE_PAGE_NONE,
+            flags: 0,
             meshes: [
                 ground,
                 MeshRange::default(),

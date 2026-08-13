@@ -18,10 +18,12 @@ import {
   QUALITY_UNBOUNDED,
   VOX_OP,
   VXPK_CHUNK_RECORD_SIZE,
+  VXPK_CHUNK_FLAG_BORDER_RING,
   VXPK_META_FLAG_TREE_COARSE,
   VXPK_META_FLAG_TREE_LOD,
   VXPK_META_SIZE,
   VXPK_TAG,
+  VXPK_VERSION,
 } from "../contracts/spec/voxel-spec.ts";
 
 const root = join(import.meta.dir, "..");
@@ -141,6 +143,13 @@ test("the pak declares the levels of detail it carries", () => {
   expect(MESH_KINDS).toBe(Object.keys(MESH_KIND).length);
   // 20 = coords + AABB + the bake page word and its pad (v6).
   expect(VXPK_CHUNK_RECORD_SIZE).toBe(20 + MESH_KINDS * 12);
+});
+
+test("VXPK v9 assigns the former chunk pad to border-ring flags", () => {
+  expect(VXPK_VERSION).toBe(9);
+  expect(VXPK_CHUNK_FLAG_BORDER_RING).toBe(1);
+  expect(VXPK_CHUNK_FLAG_BORDER_RING & (VXPK_CHUNK_FLAG_BORDER_RING - 1)).toBe(0);
+  expect(VXPK_CHUNK_RECORD_SIZE).toBe(128);
 });
 
 // Mesh kinds ARE the draw order (voxel-spec.ts §MESH_KIND), and the two tree

@@ -977,6 +977,7 @@ mod tests {
             aabb_min: [0, 0, cy * 128],
             aabb_max: [128, 0, cy * 128 + 128],
             bake_page: spec::BAKE_PAGE_NONE,
+            flags: 0,
             meshes: m,
         };
         let empty = MeshRange::default();

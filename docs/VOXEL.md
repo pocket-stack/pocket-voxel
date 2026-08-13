@@ -309,6 +309,12 @@ level the pak holds rather than losing its trees. And the **chunk record grew
 two mesh ranges**, which is a VXPK version bump (3 → 4), so a stale pak is
 rejected instead of mis-read.
 
+VXPK v9 assigns the CHNK record's former reserved `u16` to chunk flags
+without changing the 128-byte record size. `VXPK_CHUNK_FLAG_BORDER_RING`
+(bit 0) marks geometry that belongs only to the current map's protective
+border; unknown bits fail pak validation. This lets the same map record be
+safe as slot 0 and as a neighbouring slot without duplicating its body mesh.
+
 **Where the two levels do not line up.** A quad joins the chunk its centroid
 falls in, and a hull is a ball wider than the cell it stands on, so a tree at
 a chunk seam can put a few of its hull quads in the neighbouring chunk while

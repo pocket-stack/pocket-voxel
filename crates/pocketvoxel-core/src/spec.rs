@@ -393,7 +393,7 @@ pub const EVENT_CAP: usize = 64;
 // ---------------------------------------------------------------------------
 
 pub const VXPK_MAGIC: u32 = 0x4b505856; // 'VXPK'
-pub const VXPK_VERSION: u16 = 8;
+pub const VXPK_VERSION: u16 = 9;
 pub const VXPK_HEADER_SIZE: usize = 16;
 pub const VXPK_ENTRY_SIZE: usize = 16;
 pub const VXPK_ALIGN: usize = 16;
@@ -408,6 +408,8 @@ pub const VXPK_META_FLAG_TREE_LOD: u32 = 1;
 pub const VXPK_META_FLAG_TREE_COARSE: u32 = 2;
 /// META flag bit 2: eligible chunks carry a baked ground quad + page.
 pub const VXPK_META_FLAG_GROUND_BAKE: u32 = 4;
+/// CHNK flag bit 0: border-ring geometry, drawn for map slot 0 only.
+pub const VXPK_CHUNK_FLAG_BORDER_RING: u16 = 1;
 /// `Chunk.bake_page` value for "no baked ground".
 pub const BAKE_PAGE_NONE: u16 = 0xffff;
 /// The AUDI payload's own header (json_len, program_len, two pad words).

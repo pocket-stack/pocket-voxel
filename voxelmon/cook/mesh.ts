@@ -593,6 +593,8 @@ export interface PackedMesh {
 export interface ChunkOut {
   cx: number;
   cy: number;
+  /** VXPK_CHUNK_FLAG_* bits; omitted means an ordinary map-body record. */
+  flags?: number;
   /** Atlas page of this chunk's baked ground, when eligible (v6). */
   bakePage?: number;
   aabbMin: [number, number, number];

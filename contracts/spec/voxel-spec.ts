@@ -722,11 +722,13 @@ export const VXPK_MAGIC = 0x4b505856; // 'VXPK'
  * (`MESH_KIND.treeCoarse`); 6 by the baked-ground quad
  * (`MESH_KIND.groundBake`) and its per-chunk bake page; 7 by the baked
  * chunk's kept-structure stream (`MESH_KIND.terrainKeep`); 8 shrank the
- * vertex to 16 bytes (u16 fixed-point UVs). The shapes are
+ * vertex to 16 bytes (u16 fixed-point UVs); 9 gave the chunk record's
+ * reserved u16 a flags meaning so border rings can be current-map-only.
+ * The shapes are
  * pinned below and both readers validate them, so an older pak is
  * rejected, never mis-read.
  */
-export const VXPK_VERSION = 8;
+export const VXPK_VERSION = 9;
 export const VXPK_HEADER_SIZE = 16;
 export const VXPK_ENTRY_SIZE = 16;
 export const VXPK_ALIGN = 16;
@@ -754,6 +756,8 @@ export const VXPK_META_FLAG_TREE_COARSE = 1 << 1;
  * everywhere — slower, never wrong.
  */
 export const VXPK_META_FLAG_GROUND_BAKE = 1 << 2;
+/** CHNK flag bit 0: this record is a border ring, drawn for slot 0 only. */
+export const VXPK_CHUNK_FLAG_BORDER_RING = 1 << 0;
 /** The AUDI payload's own header (json_len, program_len, two pad words). */
 export const VXPK_AUDIO_HEADER_SIZE = 16;
 /** The VCOL payload's own header (version, counts, flags, two pad words). */
@@ -908,7 +912,7 @@ export const MESH_KINDS = 9;
 
 /**
  * Bytes per CHNK chunk record: i16 cx | i16 cy | i16 AABB[6] | u16
- * bake_page (0xffff = no bake) | u16 pad | one 12-byte mesh range per
+ * bake_page (0xffff = no bake) | u16 flags | one 12-byte mesh range per
  * MESH_KIND. Both writers size the directory with this.
  */
 export const VXPK_CHUNK_RECORD_SIZE = 20 + MESH_KINDS * 12;
