@@ -377,6 +377,9 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             }
             slot_pal[slot] = pak.map_world_pal(ms.map_id).unwrap_or(COLOR_PAL_NONE);
             for chunk in pak.chunks_of(dir) {
+                if slot != 0 && chunk.flags & spec::VXPK_CHUNK_FLAG_BORDER_RING != 0 {
+                    continue;
+                }
                 let mins = vec3(
                     (chunk.aabb_min[0] as i32 + ms.ox) as f32,
                     chunk.aabb_min[1] as f32,
@@ -971,13 +974,13 @@ mod tests {
                 &[0, 1, 2, 0, 2, 3],
             )
         };
-        let chunk = |cy: i16, m: [MeshRange; spec::MESH_KINDS]| ChunkDef {
+        let chunk = |cy: i16, flags: u16, m: [MeshRange; spec::MESH_KINDS]| ChunkDef {
             cx: 0,
             cy,
             aabb_min: [0, 0, cy * 128],
             aabb_max: [128, 0, cy * 128 + 128],
             bake_page: spec::BAKE_PAGE_NONE,
-            flags: 0,
+            flags,
             meshes: m,
         };
         let empty = MeshRange::default();
@@ -1031,17 +1034,65 @@ mod tests {
             } else {
                 empty
             },
-            empty,
+            quad(32, -384, 96, -320),
             quad(0, -384, 64, -320),
             quad(64, -320, 128, -256),
         ];
-        b.map(7, &[chunk(-3, far), chunk(-1, mid), chunk(0, near)]);
+        b.map(
+            7,
+            &[
+                chunk(-3, spec::VXPK_CHUNK_FLAG_BORDER_RING, far),
+                chunk(-1, 0, mid),
+                chunk(0, 0, near),
+            ],
+        );
         b.stamps(7, &[]);
         b.game(b"{}");
         if tree_lod {
             b.meta_flags(spec::VXPK_META_FLAG_TREE_LOD | spec::VXPK_META_FLAG_TREE_COARSE);
         }
         b.finish()
+    }
+
+    #[test]
+    fn border_ring_chunks_draw_only_for_the_current_map_slot() {
+        let blob = pak::AlignedBlob::from_bytes(&quality_pak_bytes(true));
+        let pak = pak::read(blob.bytes()).unwrap();
+        let ring = pak
+            .chunks
+            .iter()
+            .find(|chunk| chunk.flags & spec::VXPK_CHUNK_FLAG_BORDER_RING != 0)
+            .expect("fixture carries a border ring");
+        let ring_ranges: alloc::vec::Vec<u32> = ring
+            .meshes
+            .iter()
+            .filter(|mesh| mesh.index_count > 0)
+            .map(|mesh| mesh.vert_base)
+            .collect();
+
+        let render = |slot: i32| {
+            let mut scene = Scene::new();
+            scene.op(op::QUALITY, &[spec::quality_tier::DESKTOP as i32], None);
+            scene.op(op::MAP_SHOW, &[slot, 7, 0, 0], None);
+            scene.op(op::CAM, &[64 * Q4, 64 * Q4], None);
+            scene.op(op::PITCH, &[4], None);
+            for _ in 0..spec::PITCH_TWEEN_TICKS {
+                scene.tick();
+            }
+            build(&scene, &pak)
+        };
+        let body_has_ring = |list: &DrawList| {
+            list.items.iter().any(|item| match item {
+                Item::ChunkMesh { mesh, .. } => ring_ranges.contains(&mesh.vert_base),
+                _ => false,
+            })
+        };
+
+        assert!(body_has_ring(&render(0)), "slot 0 keeps its protective ring");
+        assert!(
+            !body_has_ring(&render(1)),
+            "neighbour slots omit every mesh pass carried by a ring record"
+        );
     }
 
     /// The current PSP rung has no moving representation boundary: it keeps
