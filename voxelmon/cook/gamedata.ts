@@ -10,7 +10,8 @@
 // tile id == code.
 
 import { LIGATURE_BASE } from "../game/ui/tiles.ts";
-import type { GenData, MapDef, TilesetDef } from "./data.ts";
+import { tileShapesFor } from "./classify.ts";
+import { GameMap, type GenData, type MapDef, type Profile, type TilesetDef } from "./data.ts";
 
 export interface AtlasIndex {
   /** sprite sheet name ("red", "oak", ...) -> atlas page. */
@@ -25,7 +26,7 @@ export interface AtlasIndex {
 }
 
 /** The tileset subset the guest needs (collision + animation semantics). */
-function tilesetSubset(ts: TilesetDef): Record<string, unknown> {
+function tilesetSubset(ts: TilesetDef, groundHeights?: number[]): Record<string, unknown> {
   const out: Record<string, unknown> = {
     id: ts.id,
     // blocks are collision-relevant: cell resolution needs block -> tiles
@@ -39,7 +40,21 @@ function tilesetSubset(ts: TilesetDef): Record<string, unknown> {
   if (ts.grassTile !== undefined) out.grassTile = ts.grassTile;
   if (ts.waterTiles !== undefined) out.waterTiles = ts.waterTiles;
   if (ts.shoreTiles !== undefined) out.shoreTiles = ts.shoreTiles;
+  if (groundHeights !== undefined) out.groundHeights = groundHeights;
   return out;
+}
+
+/**
+ * Tile-id -> raised support height used by VoxelScene.groundAt. This is
+ * intentionally the tile-level `forMap` answer, not the position-sensitive
+ * `shapeAt`: entities stand on the same bottom-left collision tile as the
+ * Lua runtime. Recessed classes and stairs remain at floor height.
+ */
+function supportHeights(map: GameMap, profile: Profile | null): number[] {
+  return tileShapesFor(map, profile).tiles.map((shape) => {
+    if (!shape || shape.art === "stair" || !Number.isFinite(shape.h) || shape.h <= 0) return 0;
+    return shape.h;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -147,15 +162,33 @@ export function buildMapPalette(gen: GenData): Record<string, number> {
   return out;
 }
 
-export function buildGamedata(gen: GenData, atlas: AtlasIndex, cookedMaps: string[]): Uint8Array {
+export function buildGamedata(
+  gen: GenData,
+  atlas: AtlasIndex,
+  cookedMaps: string[],
+  profile: Profile | null = null,
+): Uint8Array {
   // pokemon minus pic paths
   const pokemon: Record<string, unknown> = {};
   for (const [id, def] of Object.entries(gen.pokemon)) {
     const { spriteFront: _f, spriteBack: _b, ...rest } = def;
     pokemon[id] = rest;
   }
+  // A shared tileset has one TileShape.forMap result, so compute it once
+  // from the first cooked map that uses it. Uncooked-map tilesets remain in
+  // GAME for map metadata compatibility but carry no derived support table.
+  const supports = new Map<string, number[]>();
+  for (const mapId of cookedMaps) {
+    const def = gen.maps[mapId];
+    if (!def || supports.has(def.tileset)) continue;
+    const ts = gen.tilesets[def.tileset];
+    if (!ts) continue;
+    supports.set(def.tileset, supportHeights(new GameMap(def, ts), profile));
+  }
   const tilesets: Record<string, unknown> = {};
-  for (const [id, ts] of Object.entries(gen.tilesets)) tilesets[id] = tilesetSubset(ts);
+  for (const [id, ts] of Object.entries(gen.tilesets)) {
+    tilesets[id] = tilesetSubset(ts, supports.get(id));
+  }
 
   const game = {
     constants: gen.constants,

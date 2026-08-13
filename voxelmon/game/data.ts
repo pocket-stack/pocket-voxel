@@ -207,6 +207,8 @@ export interface TilesetDef {
   imageWidth?: number;
   imageHeight?: number;
   tilesPerRow?: number;
+  /** Cooked tile-id -> positive entity support height; absent in raw gen/. */
+  groundHeights?: number[];
   source?: string;
 }
 

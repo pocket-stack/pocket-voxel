@@ -151,7 +151,11 @@ type_chart, trainers, text, text_pointers, trainer_headers, field, plus two
 cook-time products: `atlas` (the page-index maps) and `mapPalette` (map id →
 SGB palette index into the pak's SGB set — the static port of pokered's
 SetPal_Overworld rule; the guest emits `palette(mapPalette[map] ?? -1)` at
-map entry). The guest
+map entry). Tilesets used by `cookedMaps` also carry a dense
+`groundHeights` array indexed by tile id. Each entry is the positive
+tile-level `TileShape.forMap` support height; missing/recessed shapes and
+stairs are `0`. Tilesets used only by uncooked maps omit the derived field.
+The guest
 calls `voxel.gamedata()` once, `JSON.parse`s, and never crosses the boundary
 for data again. In Bun (headless sim) the same object is loaded straight from
 `gen/` by `voxelmon/game/data.ts` — one loader, two transports.

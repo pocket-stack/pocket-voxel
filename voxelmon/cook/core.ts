@@ -369,7 +369,7 @@ export function cookVoxelPak(
     uiPage,
     terrainPage,
   };
-  const gameJson = buildGamedata(gen, atlas, [...mapNames]);
+  const gameJson = buildGamedata(gen, atlas, [...mapNames], profile);
   const glyphs = buildCharmap(gen);
   const treeLod = packedMaps.some((map) =>
     map.chunks.some((chunk) => chunk.meshes[MESH_KIND.treeBox].indices.length > 0),
