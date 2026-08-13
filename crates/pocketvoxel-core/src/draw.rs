@@ -203,10 +203,15 @@ pub enum Item {
     /// Flat-color blended quad on the ground under an entity/card.
     /// Depth-tested, never depth-written. Corners: bl, br, tr, tl.
     ShadowDecal { corners: [[f32; 3]; 4], abgr: u32 },
-    /// The player silhouette: the card again, flat color, inverted depth
-    /// test (draws only where occluded), no depth write.
+    /// The player silhouette: the same sprite-masked card in a flat color,
+    /// with inverted depth test (draws only where occluded) and no depth
+    /// write. The texture coordinates are load-bearing: drawing this as an
+    /// untextured quad exposes the transparent 16x16 card as a grey box.
     Ghost {
         verts: [[f32; 3]; 4],
+        page: u16,
+        uv: [f32; 4],
+        mirror: bool,
         pull: f32,
         abgr: u32,
     },
@@ -691,9 +696,14 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
         [0.0, row * vh, u1, (row + 1.0) * vh]
     };
     for ent in scene.ents.iter().filter(|e| e.shown) {
-        if ent.flags & ent_flag::GHOST != 0 {
+        if ent.flags & ent_flag::GHOST != 0
+            && let Some(page) = page_at(pak, ent.sheet)
+        {
             items.push(Item::Ghost {
                 verts: card_verts(ent_feet(ent), card_w, card_w, a),
+                page: ent.sheet as u16,
+                uv: sheet_uv(page, ent.frame),
+                mirror: ent.flags & ent_flag::MIRROR != 0,
                 pull: pull_card,
                 abgr: GHOST_ABGR,
             });
@@ -855,7 +865,15 @@ mod tests {
         let mut s = shown_scene();
         s.op(
             op::ENT,
-            &[0, 1, 0, 64 * Q4, 64 * Q4, 0, ent_flag::GHOST as i32],
+            &[
+                0,
+                1,
+                1,
+                64 * Q4,
+                64 * Q4,
+                0,
+                (ent_flag::GHOST | ent_flag::MIRROR) as i32,
+            ],
             None,
         );
         s.op(op::UI_TILE, &[2, 3, 5], None);
@@ -873,7 +891,43 @@ mod tests {
         assert_eq!(ranks, sorted, "items appear in §3 draw order");
         assert!(matches!(list.items[0], Item::SkyBands { .. }));
         assert!(matches!(list.items.last(), Some(Item::UiQuad { .. })));
-        assert!(list.items.iter().any(|i| matches!(i, Item::Ghost { .. })));
+        let ghost = list
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Ghost {
+                    verts,
+                    page,
+                    uv,
+                    mirror,
+                    pull,
+                    abgr,
+                } => Some((*verts, *page, *uv, *mirror, *pull, *abgr)),
+                _ => None,
+            })
+            .expect("ghost entity emits an occluded silhouette");
+        let card = list
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Card {
+                    verts,
+                    page,
+                    uv,
+                    mirror,
+                    pull,
+                } => Some((*verts, *page, *uv, *mirror, *pull)),
+                _ => None,
+            })
+            .expect("ghost entity still emits its ordinary card");
+        assert_eq!(ghost.0, card.0, "ghost reuses the card geometry");
+        assert_eq!(
+            (ghost.1, ghost.2, ghost.3, ghost.4),
+            (card.1, card.2, card.3, card.4),
+            "ghost reuses the card's exact sprite mask and pull",
+        );
+        assert_eq!((ghost.1, ghost.2, ghost.3), (1, [0.0, 0.5, 1.0, 1.0], true));
+        assert_eq!(ghost.5, GHOST_ABGR);
         // Deterministic: the same scene builds the same list.
         let again = build(&s, &pak);
         assert_eq!(list.items, again.items);

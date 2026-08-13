@@ -1020,6 +1020,35 @@ the six directional connection checks, the eight named support objects,
 retained sky backend tests, Web playback, and PSP/Vita package assembly use
 the same v9 pak.
 
+### 11b. Player occlusion silhouette (2026-08-13)
+
+The player hint behind tall scenery now reuses the live card's atlas page,
+frame UVs, mirror flag, geometry and camera pull as an alpha mask. Visible
+sprite texels become the single translucent ghost colour; transparent card
+texels stay absent. This replaces the old untextured 16x16 quad, whose empty
+corners appeared as a grey rectangle above the player. The ordinary foot
+shadow is a separate decal and is unchanged.
+
+The software renderer samples the source alpha before substituting the flat
+colour. PSP binds a one-draw silhouette CLUT, while Vita caches an RGBA atlas
+variant keyed by the same flat colour; both retain the existing occluded-only
+depth test and never write depth.
+
+The story golden update was reviewed as RGB PNG diffs against the immediately
+preceding scene-repair baseline. Only six marks per quality rung changed, and
+every changed pixel lay inside the former player-card rectangle. The other
+five story marks and all eight battle hashes were byte-identical.
+
+| story mark | psp px | desktop px |
+| --- | ---: | ---: |
+| downstairs | 149 | 149 |
+| pallet-town | 211 | 211 |
+| lab-exit | 153 | 158 |
+| route-1 | 65 | 53 |
+| viridian | 65 | 53 |
+| done | 65 | 53 |
+| **total** | **708** | **677** |
+
 ## 12. The PS Vita port
 
 The Vita runs the same guest bundle, the same cooked pak and the same core as
