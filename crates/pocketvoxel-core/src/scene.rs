@@ -133,6 +133,9 @@ pub struct Scene {
     pub pitch_t: u32,
     /// Global day tint, ABGR (0xffffffff = neutral).
     pub tint: u32,
+    /// Whether the outdoor sky bands are visible. Hidden skies still clear
+    /// color and depth through the mandatory first draw-list item.
+    pub sky_visible: bool,
     /// Selected SGB palette: index into the pak's SGB set (VPAL[4 + i]) for
     /// the non-ui atlas kinds; -1 = the GB grayscale ramp (voxel-spec.ts
     /// `palette`).
@@ -174,6 +177,7 @@ impl Scene {
             pitch_from_deg: PITCH_RUNGS[0],
             pitch_t: PITCH_TWEEN_TICKS, // settled at rung 0
             tint: 0xffff_ffff,
+            sky_visible: true,
             palette: -1,
             stamps_off: Vec::new(),
             ents: [Ent::default(); ENTS_MAX],
@@ -322,6 +326,11 @@ impl Scene {
                 }
             }
             op::TINT => self.tint = a(0) as u32,
+            op::SKY => {
+                if !args.is_empty() {
+                    self.sky_visible = a(0) != 0;
+                }
+            }
             op::PALETTE => {
                 if !args.is_empty() {
                     self.palette = a(0);
@@ -489,6 +498,14 @@ mod tests {
         s.op(op::TINT, &[0x40ff8040u32 as i32], None);
         assert_eq!(s.tint, 0x40ff8040);
 
+        assert!(s.sky_visible, "sky is visible at boot");
+        s.op(op::SKY, &[0], None);
+        assert!(!s.sky_visible);
+        s.op(op::SKY, &[], None);
+        assert!(!s.sky_visible, "malformed sky op is a no-op");
+        s.op(op::SKY, &[-7], None);
+        assert!(s.sky_visible, "every non-zero value shows the sky");
+
         assert_eq!(s.palette, -1, "boot palette is the GB grayscale ramp");
         s.op(op::PALETTE, &[3], None);
         assert_eq!(s.palette, 3);
@@ -620,6 +637,7 @@ mod tests {
         assert_eq!(s.cam_x, 0);
         assert_eq!(s.tick, 0);
         assert_eq!(s.palette, -1, "reset restores the grayscale ramp");
+        assert!(s.sky_visible, "reset restores the visible-sky default");
     }
 
     fn featured_px(px: i32) -> i32 {

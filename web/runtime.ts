@@ -77,6 +77,7 @@ class WasmVoxelHost implements VoxelHost {
   cam(x: number, y: number): void { this.call(VOX_OP.cam, x, y); }
   pitch(rung: number): void { this.call(VOX_OP.pitch, rung); }
   tint(abgr: number): void { this.call(VOX_OP.tint, abgr); }
+  sky(on: number): void { this.call(VOX_OP.sky, on); }
   stamp(mapId: number, cx: number, cy: number, on: number): void {
     this.call(VOX_OP.stamp, mapId, cx, cy, on);
   }

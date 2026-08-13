@@ -41,6 +41,11 @@ test("op codes are unique and never use 0", () => {
   expect(codes.includes(0 as never)).toBe(false);
 });
 
+test("new surface ops append without renumbering the existing contract", () => {
+  expect(VOX_OP.arenaEnd).toBe(74);
+  expect(VOX_OP.sky).toBe(75);
+});
+
 // The quality ladder's structural rules. Every one of these is a claim the
 // core, the hosts and the goldens all lean on; none of them is checkable by
 // reading a single number.

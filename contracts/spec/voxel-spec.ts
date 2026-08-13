@@ -508,6 +508,9 @@ export const EMOTE = {
 //                                          precedence rule. Color is a pak
 //                                          capability, not a guest concern:
 //                                          the wire is unchanged either way
+//     sky(on)                              retain outdoor sky visibility;
+//                                          zero clears to opaque black, any
+//                                          non-zero value shows sky bands
 //   entities
 //     ent(slot, sheet, frame, x, y, lift, flags)   x/y world px Q4; lift =
 //                                                  absolute feet height above
@@ -628,6 +631,8 @@ export const VOX_OP = {
   cry: 22,
   audioWaves: 23,
   audioDrum: 24,
+
+  sky: 75,
 } as const;
 
 /** Fixed-point scales used by op args. */

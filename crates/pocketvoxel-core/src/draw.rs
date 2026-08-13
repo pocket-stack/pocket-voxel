@@ -341,13 +341,23 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
     let mut items = Vec::new();
 
     // 1. Sky.
-    let mut colors = SKY_ABGR;
-    for c in &mut colors {
-        *c = modulate_rgb(*c, scene.tint);
+    let mut colors = if scene.sky_visible {
+        SKY_ABGR
+    } else {
+        [0xff00_0000; SKY_BANDS]
+    };
+    if scene.sky_visible {
+        for c in &mut colors {
+            *c = modulate_rgb(*c, scene.tint);
+        }
     }
     items.push(Item::SkyBands {
         colors,
-        horizon_row: horizon_row(&cam, VIEW_H),
+        horizon_row: if scene.sky_visible {
+            horizon_row(&cam, VIEW_H)
+        } else {
+            0
+        },
     });
 
     // Visible chunks, gathered once and replayed per mesh-kind pass.
@@ -867,6 +877,24 @@ mod tests {
         // Deterministic: the same scene builds the same list.
         let again = build(&s, &pak);
         assert_eq!(list.items, again.items);
+    }
+
+    #[test]
+    fn hidden_sky_keeps_the_mandatory_opaque_black_clear() {
+        let blob = pak::AlignedBlob::from_bytes(&pak::tests::tiny_pak_bytes());
+        let pak = pak::read(blob.bytes()).unwrap();
+        let mut s = shown_scene();
+        s.op(op::SKY, &[0], None);
+        let list = build(&s, &pak);
+        let Item::SkyBands {
+            colors,
+            horizon_row,
+        } = list.items[0]
+        else {
+            panic!("the clear remains the first draw-list item");
+        };
+        assert_eq!(colors, [0xff00_0000; SKY_BANDS]);
+        assert_eq!(horizon_row, 0);
     }
 
     #[test]

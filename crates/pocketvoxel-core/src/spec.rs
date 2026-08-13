@@ -337,6 +337,7 @@ pub mod op {
     pub const CRY: u32 = 22;
     pub const AUDIO_WAVES: u32 = 23;
     pub const AUDIO_DRUM: u32 = 24;
+    pub const SKY: u32 = 75;
 }
 
 /// Fixed-point scales used by op args.
