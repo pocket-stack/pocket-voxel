@@ -609,7 +609,7 @@ describe("Pocket Voxel web pipeline UX", () => {
       vita: { files: { id: string; path: string; bytes: number; sha256: string }[] };
     };
     expect(manifest.schemaVersion).toBe(1);
-    expect(manifest.vxpkVersion).toBe(8);
+    expect(manifest.vxpkVersion).toBe(9);
     const guest = await Bun.build({
       entrypoints: ["voxelmon/game/psp-main.ts"],
       target: "browser",

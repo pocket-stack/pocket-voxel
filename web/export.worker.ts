@@ -73,7 +73,7 @@ async function loadManifest(): Promise<TemplateManifest> {
     const response = await fetch(manifestUrl, { credentials: "same-origin" });
     if (!response.ok) throw new Error(`Platform manifest returned HTTP ${response.status}.`);
     const manifest = await response.json() as TemplateManifest;
-    if (manifest.schemaVersion !== 1 || manifest.vxpkVersion !== 8) {
+    if (manifest.schemaVersion !== 1 || manifest.vxpkVersion !== 9) {
       throw new Error("Platform templates do not match this Pocket Voxel build.");
     }
     for (const file of [...manifest.psp.files, ...manifest.vita.files]) {

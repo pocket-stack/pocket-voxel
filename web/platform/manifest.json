@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "vxpkVersion": 8,
+  "vxpkVersion": 9,
   "sourceRevision": "ebf2af44f87cc9cd946c6cade1333d0d264be048",
   "guestSha256": "c5a81820bdb009acfe8f6fbace0c36af0483736528492c6801197e03a33b455b",
   "psp": {
