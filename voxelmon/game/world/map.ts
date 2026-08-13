@@ -131,8 +131,7 @@ export function defPassable(
 
 /** Map.lua:148 isOutdoor — town/route surface (door SFX, walk-out step). */
 export function isOutdoor(def: MapDef): boolean {
-  const d = def as unknown as { outdoor?: boolean };
-  if (d.outdoor !== undefined) return d.outdoor;
+  if (def.outdoor !== undefined) return def.outdoor;
   return def.tileset === "OVERWORLD";
 }
 
@@ -201,6 +200,22 @@ export class GameMap {
   // Map.lua:216
   inBounds(cx: number, cy: number): boolean {
     return cx >= 0 && cy >= 0 && cx < this.widthCells && cy < this.heightCells;
+  }
+
+  /**
+   * VoxelScene.lua:171 groundAt — positive support height at a cell's
+   * bottom-left collision tile. Off-map seam steps stay on the flat
+   * neighbour walkway, and old/raw datasets without cooked heights remain
+   * compatible at height zero.
+   */
+  groundAt(cx: number, cy: number): number {
+    if (!this.inBounds(cx, cy)) return 0;
+    const heights = this.tileset.groundHeights;
+    if (!Array.isArray(heights)) return 0;
+    const tile = this.cellTile(cx, cy);
+    if (!Number.isInteger(tile) || tile < 0 || tile >= heights.length) return 0;
+    const height = heights[tile];
+    return typeof height === "number" && Number.isFinite(height) && height > 0 ? height : 0;
   }
 
   // Map.lua:220

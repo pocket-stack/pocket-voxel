@@ -78,13 +78,13 @@ const PAK_COLOR_OFFSET: u16 = 4;
 const PAK_POSITION_OFFSET: u16 = 8;
 const _: () = assert!(VERTEX_STRIDE == 16);
 
-/// CPU-built untextured vertex (sky bands, shadow decals, the ghost):
+/// CPU-built untextured vertex (sky bands and shadow decals):
 /// `u32 ABGR` then `f32 xyz`.
 pub const FLAT_STRIDE: u16 = 16;
 const FLAT_COLOR_OFFSET: u16 = 0;
 const FLAT_POSITION_OFFSET: u16 = 4;
 
-/// CPU-built textured vertex (billboard cards, the GB UI layer):
+/// CPU-built textured vertex (billboard cards, occlusion ghosts, the GB UI layer):
 /// `f32 uv` then `f32 xyz`. Floats rather than the pak's fixed point because
 /// these are built per frame anyway, and a card's UV is a sub-texel crop.
 pub const TEX_STRIDE: u16 = 20;

@@ -9,6 +9,7 @@ use wasm_bindgen::prelude::*;
 use miniz_oxide::deflate::compress_to_vec;
 
 const VXPK_MAGIC: &[u8; 4] = b"VXPK";
+const VXPK_VERSION: u16 = 9;
 const PBP_MAGIC: u32 = 0x5042_5000;
 const PBP_VERSION: u32 = 0x0001_0000;
 const ZIP_LOCAL_FILE: u32 = 0x0403_4b50;
@@ -138,7 +139,7 @@ fn validate_pak(pak: &[u8]) -> Result<(), String> {
     if pak.len() < 16 || pak.get(..4) != Some(VXPK_MAGIC.as_slice()) {
         return Err("cooked world is not a VXPK".into());
     }
-    if u16::from_le_bytes(pak[4..6].try_into().unwrap()) != 8 {
+    if u16::from_le_bytes(pak[4..6].try_into().unwrap()) != VXPK_VERSION {
         return Err("cooked world uses an unsupported VXPK version".into());
     }
     if u16::from_le_bytes(pak[6..8].try_into().unwrap()) != 9 {
@@ -429,7 +430,7 @@ mod tests {
 
     fn pak() -> Vec<u8> {
         let mut bytes = b"VXPK".to_vec();
-        bytes.extend_from_slice(&8_u16.to_le_bytes());
+        bytes.extend_from_slice(&VXPK_VERSION.to_le_bytes());
         bytes.extend_from_slice(&9_u16.to_le_bytes());
         bytes.extend_from_slice(&32_u32.to_le_bytes());
         bytes.extend_from_slice(&0_u32.to_le_bytes());
@@ -519,7 +520,7 @@ mod tests {
         let error = psp_package(b"PRX", b"ICON", b"PIC", b"NOTICES", b"ROM").unwrap_err();
         assert_eq!(error, "cooked world is not a VXPK");
         let mut wrong_version = pak();
-        wrong_version[4] = 7;
+        wrong_version[4..6].copy_from_slice(&8_u16.to_le_bytes());
         assert_eq!(
             validate_pak(&wrong_version).unwrap_err(),
             "cooked world uses an unsupported VXPK version"

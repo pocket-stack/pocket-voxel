@@ -36,14 +36,17 @@ use vita2d_sys as v2d;
 use crate::gxm::GpuSlab;
 
 /// One resident texture's identity: the page, its animation frame, the VPAL
-/// index the core resolved for the draw, and whether the day tint was folded
-/// in (the GB UI layer samples the raw ramp, everything else the tinted one).
+/// index the core resolved for the draw, whether the day tint was folded in
+/// (the GB UI layer samples the raw ramp, everything else the tinted one),
+/// and an optional flat silhouette color. `solid` keeps source alpha only;
+/// it is how the shader-limited Vita backend masks the occluded player ghost.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Key {
     pub page: u16,
     pub frame: u16,
     pub pal: u16,
     pub tinted: bool,
+    pub solid: Option<u32>,
 }
 
 struct Entry {
@@ -144,7 +147,16 @@ impl AtlasCache {
         // A VPAL entry is ABGR (0xAABBGGRR), which is exactly what
         // `U8U8U8U8_ABGR` reads, so the palette lookup writes the texel
         // verbatim and no channel shuffle exists to get backwards.
-        if key.tinted {
+        if let Some(solid) = key.solid {
+            for &index in &self.indices {
+                let source = palette[index as usize];
+                self.texels.push(if (source >> 24) & 0xff >= 0x80 {
+                    solid
+                } else {
+                    0
+                });
+            }
+        } else if key.tinted {
             let tint = self.tint;
             for &index in &self.indices {
                 self.texels.push(modulate_rgb(palette[index as usize], tint));

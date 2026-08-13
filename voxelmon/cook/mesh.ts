@@ -15,6 +15,7 @@ import {
   MAX_VERTS_PER_CHUNK_MESH,
   MESH_KIND,
   MESH_KINDS,
+  VXPK_CHUNK_FLAG_BORDER_RING,
   VOLUME_TOP_SHADE,
 } from "../../contracts/spec/voxel-spec.ts";
 import type { GameMap } from "./data.ts";
@@ -75,11 +76,89 @@ export interface MapGeometry {
   stamps: Map<string, Quad[]>;
 }
 
-/** Emit the full geometry for one analysed map (bodyOnly = false). */
-export function runGeometry(map: GameMap, S: SGrid, keepHidden = false): MapGeometry {
+/** One connected neighbour body's bounds in this map's world-pixel space. */
+export interface BorderMask {
+  x0: number;
+  z0: number;
+  x1: number;
+  z1: number;
+}
+
+type BorderScope = "body" | "ring";
+
+function masked(
+  masks: readonly BorderMask[],
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+  closed: boolean,
+): boolean {
+  return masks.some((mask) =>
+    closed
+      ? x1 >= mask.x0 && x0 <= mask.x1 && z1 >= mask.z0 && z0 <= mask.z1
+      : x1 > mask.x0 && x0 < mask.x1 && z1 > mask.z0 && z0 < mask.z1,
+  );
+}
+
+function containedInMask(
+  masks: readonly BorderMask[],
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+): boolean {
+  return masks.some(
+    (mask) => x0 >= mask.x0 && x1 <= mask.x1 && z0 >= mask.z0 && z1 <= mask.z1,
+  );
+}
+
+function quadBounds(q: Quad): [number, number, number, number] {
+  const xs = q.c.map((corner) => corner[0]);
+  const zs = q.c.map((corner) => corner[2]);
+  return [Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs)];
+}
+
+function extentScope(
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+  bodyW: number,
+  bodyH: number,
+  masks: readonly BorderMask[],
+): BorderScope | null {
+  const overBody = x1 > 0 && x0 < bodyW && z1 > 0 && z0 < bodyH;
+  if (overBody) return "body";
+  return masked(masks, x0, z0, x1, z1, true) ? null : "ring";
+}
+
+function outwardOnBodyEdge(q: Quad, bodyW: number, bodyH: number): boolean {
+  const [x0, z0, x1, z1] = quadBounds(q);
+  if (z0 === z1 && (z0 === 0 || z0 === bodyH) && x1 > 0 && x0 < bodyW) {
+    return (z0 === bodyH && q.f === FACE.south) || (z0 === 0 && q.f === FACE.north);
+  }
+  if (x0 === x1 && (x0 === 0 || x0 === bodyW) && z1 > 0 && z0 < bodyH) {
+    return (x0 === bodyW && q.f === FACE.east) || (x0 === 0 && q.f === FACE.west);
+  }
+  return false;
+}
+
+function scoped(q: Quad, scope: BorderScope): Quad {
+  return scope === "ring" ? { ...q, borderRing: true } : { ...q, borderRing: undefined };
+}
+
+/** Emit one map body plus its masked, current-map-only protective ring. */
+export function runGeometry(
+  map: GameMap,
+  S: SGrid,
+  masks: readonly BorderMask[] = [],
+  keepHidden = false,
+): MapGeometry {
   const terrain: Quad[] = [];
   const water: Quad[] = [];
   const perRow = map.tileset.tilesPerRow || 16;
+  let emittingBorderRing = false;
 
   // Two readings of the same grid. `heightAt` is the cook's own: a claimed
   // cell is flat ground, because an object stands on it. `boxHeightAt` is
@@ -187,6 +266,7 @@ export function runGeometry(map: GameMap, S: SGrid, keepHidden = false): MapGeom
       ],
       shade: aoShades(x0 / 8, z0 / 8, h, shade, ha),
       f: FACE.up,
+      borderRing: emittingBorderRing || undefined,
     });
   };
 
@@ -248,6 +328,7 @@ export function runGeometry(map: GameMap, S: SGrid, keepHidden = false): MapGeom
       // `d` IS the direction id: SIDES carries 1/2/5/6 and no other face
       // direction ever reaches sideQuad.
       f: d as 1 | 2 | 5 | 6,
+      borderRing: emittingBorderRing || undefined,
     });
   };
 
@@ -261,6 +342,16 @@ export function runGeometry(map: GameMap, S: SGrid, keepHidden = false): MapGeom
       let s = S.shapeAt.get(k);
       const tile = S.tileAt.get(k);
       const inBody = tx >= 0 && ty >= 0 && tx < tw && ty < th;
+      emittingBorderRing = !inBody;
+
+      // Tile cells use OPEN rectangle overlap, exactly like Lua's `masked`:
+      // merely sharing the neighbour body's boundary does not erase a cell.
+      if (
+        !inBody &&
+        masked(masks, tx * 8, ty * 8, tx * 8 + 8, ty * 8 + 8, false)
+      ) {
+        continue;
+      }
 
       // under the TREES fill the border wall is modelled or it is not there
       if (!inBody && S.hideBareRing && !S.skip.has(k)) s = undefined;
@@ -351,6 +442,7 @@ export function runGeometry(map: GameMap, S: SGrid, keepHidden = false): MapGeom
           // A pitched roof plane: tilted, but +Y dominant at every gable
           // rise the volume measurer produces.
           f: FACE.up,
+          borderRing: emittingBorderRing || undefined,
         });
       } else if (run) {
         const m = Math.min(2, run.extent);
@@ -453,7 +545,12 @@ export function runGeometry(map: GameMap, S: SGrid, keepHidden = false): MapGeom
   };
 
   for (const q of S.objectQuads) {
-    terrain.push({ ...q, shade: groundShades(q) });
+    const bounds = quadBounds(q);
+    const scope =
+      q.own || outwardOnBodyEdge(q, tw * 8, th * 8)
+        ? "body"
+        : extentScope(...bounds, tw * 8, th * 8, masks);
+    if (scope) terrain.push(scoped({ ...q, shade: groundShades(q) }, scope));
   }
   // The carved hulls ride the TERRAIN stream, marked. They are split into
   // MESH_KIND.treeHull at pack time, not here, so every later stage — the
@@ -462,6 +559,19 @@ export function runGeometry(map: GameMap, S: SGrid, keepHidden = false): MapGeom
   // its exact quad order.
   const treeCoarse: Quad[] = [];
   for (const st of S.roundStamps) {
+    const sr = st.r ?? 8;
+    const stampBounds: [number, number, number, number] = [
+      st.mx - sr,
+      st.mz - sr,
+      st.mx + sr,
+      st.mz + sr,
+    ];
+    const stampOverBody =
+      stampBounds[2] > 0 &&
+      stampBounds[0] < tw * 8 &&
+      stampBounds[3] > 0 &&
+      stampBounds[1] < th * 8;
+    if (!stampOverBody && containedInMask(masks, ...stampBounds)) continue;
     for (const q of st.quads) {
       const moved: Quad = {
         c: q.c.map(([x, y, z]) => [x + st.mx, y, z + st.mz]) as [number, number, number][],
@@ -471,7 +581,10 @@ export function runGeometry(map: GameMap, S: SGrid, keepHidden = false): MapGeom
         shade: q.shade,
         f: q.f,
       };
-      terrain.push({ ...moved, shade: groundShades(moved), tree: true });
+      const scope = extentScope(...quadBounds(moved), tw * 8, th * 8, masks);
+      if (scope) {
+        terrain.push(scoped({ ...moved, shade: groundShades(moved), tree: true }, scope));
+      }
     }
     // The middle level stamps beside the fine one, into its own stream —
     // the same translation, the same ground darkening. Its NORTH faces are
@@ -490,7 +603,8 @@ export function runGeometry(map: GameMap, S: SGrid, keepHidden = false): MapGeom
         shade: q.shade,
         f: q.f,
       };
-      treeCoarse.push({ ...moved, shade: groundShades(moved) });
+      const scope = extentScope(...quadBounds(moved), tw * 8, th * 8, masks);
+      if (scope) treeCoarse.push(scoped({ ...moved, shade: groundShades(moved) }, scope));
     }
   }
 
@@ -505,6 +619,14 @@ export function runGeometry(map: GameMap, S: SGrid, keepHidden = false): MapGeom
     for (let tx = -r; tx < tw + r; tx++) {
       const k = keyOf(tx, ty);
       if (!S.round.has(k)) continue;
+      const inBody = tx >= 0 && ty >= 0 && tx < tw && ty < th;
+      emittingBorderRing = !inBody;
+      if (
+        !inBody &&
+        masked(masks, tx * 8, ty * 8, tx * 8 + 8, ty * 8 + 8, false)
+      ) {
+        continue;
+      }
       const s = S.shapeAt.get(k);
       const tile = S.tileAt.get(k);
       if (!s || tile === undefined) continue;
@@ -593,6 +715,8 @@ export interface PackedMesh {
 export interface ChunkOut {
   cx: number;
   cy: number;
+  /** VXPK_CHUNK_FLAG_* bits; omitted means an ordinary map-body record. */
+  flags?: number;
   /** Atlas page of this chunk's baked ground, when eligible (v6). */
   bakePage?: number;
   aabbMin: [number, number, number];
@@ -658,7 +782,7 @@ export function packMap(geo: MapGeometry, uvt: UvTransform): { chunks: ChunkOut[
     [MESH_KIND.grass, geo.grass],
     [MESH_KIND.flower, geo.flower],
   ];
-  const byChunk = new Map<string, Quad[][]>();
+  const byChunk = new Map<string, { flags: number; streams: Quad[][] }>();
   streams.forEach(([kind, quads]) => {
     for (const q of quads) {
       let cxSum = 0;
@@ -669,10 +793,14 @@ export function packMap(geo: MapGeometry, uvt: UvTransform): { chunks: ChunkOut[
       }
       const cx = Math.floor(cxSum / 4 / CHUNK_PX);
       const cy = Math.floor(czSum / 4 / CHUNK_PX);
-      const key = `${cx},${cy}`;
+      const flags = q.borderRing ? VXPK_CHUNK_FLAG_BORDER_RING : 0;
+      const key = `${cx},${cy},${flags}`;
       let entry = byChunk.get(key);
-      if (!entry) byChunk.set(key, (entry = Array.from({ length: MESH_KINDS }, () => [])));
-      entry[kind].push(q);
+      if (!entry) {
+        entry = { flags, streams: Array.from({ length: MESH_KINDS }, () => []) };
+        byChunk.set(key, entry);
+      }
+      entry.streams[kind].push(q);
     }
   });
 
@@ -682,16 +810,23 @@ export function packMap(geo: MapGeometry, uvt: UvTransform): { chunks: ChunkOut[
   const QUADS_PER_MESH = 10000; // 40000 verts, 60000 indices — u16-safe
   const chunks: ChunkOut[] = [];
   const keys = [...byChunk.keys()].sort((a, b) => {
-    const [ax, ay] = a.split(",").map(Number);
-    const [bx, by] = b.split(",").map(Number);
-    return ay - by || ax - bx;
+    const [ax, ay, af] = a.split(",").map(Number);
+    const [bx, by, bf] = b.split(",").map(Number);
+    // Ring first, body last: any equal-depth boundary contest is owned by
+    // the real map body, matching the 2D renderer's neighbour-over-ring rule.
+    return ay - by || ax - bx || bf - af;
   });
   for (const key of keys) {
     const [cx, cy] = key.split(",").map(Number);
     const entry = byChunk.get(key)!;
-    const batches = Math.max(1, ...entry.map((q) => Math.ceil(q.length / QUADS_PER_MESH)));
+    const batches = Math.max(
+      1,
+      ...entry.streams.map((q) => Math.ceil(q.length / QUADS_PER_MESH)),
+    );
     for (let b = 0; b < batches; b++) {
-      const slices = entry.map((quads) => quads.slice(b * QUADS_PER_MESH, (b + 1) * QUADS_PER_MESH));
+      const slices = entry.streams.map((quads) =>
+        quads.slice(b * QUADS_PER_MESH, (b + 1) * QUADS_PER_MESH),
+      );
       // Cut the carved hulls out of this batch's terrain slice. They were
       // appended after every tile and object quad, so within a chunk — and
       // therefore within a batch of one — they are a SUFFIX, and
@@ -773,7 +908,7 @@ export function packMap(geo: MapGeometry, uvt: UvTransform): { chunks: ChunkOut[
         }
       }
       if (!any) continue;
-      chunks.push({ cx, cy, aabbMin, aabbMax, meshes });
+      chunks.push({ cx, cy, flags: entry.flags || undefined, aabbMin, aabbMax, meshes });
     }
   }
 

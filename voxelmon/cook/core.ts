@@ -23,7 +23,13 @@ import type { BuildingStats } from "./buildings.ts";
 import { GameMap, type GenData, type Profile } from "./data.ts";
 import { buildCharmap, buildGamedata, type AtlasIndex } from "./gamedata.ts";
 import { BAKE_MAX_Y, BAKE_PAGE_H, BAKE_TEXELS, bakeGround, foldFacades } from "./groundbake.ts";
-import { packMap, runGeometry, type MapGeometry, type UvTransform } from "./mesh.ts";
+import {
+  packMap,
+  runGeometry,
+  type BorderMask,
+  type MapGeometry,
+  type UvTransform,
+} from "./mesh.ts";
 import { writePak, type PakInput } from "./pak.ts";
 import {
   planColour,
@@ -33,6 +39,10 @@ import {
   type RedppPack,
 } from "./redpp.ts";
 import { analyseMap } from "./structures.ts";
+import {
+  placeDirectNeighbour,
+  type ConnectionDirection,
+} from "../shared/connections.ts";
 
 export const DEFAULT_MAPS: readonly string[] = [
   "REDS_HOUSE_1F",
@@ -106,6 +116,7 @@ export function cookVoxelPak(
     if (!tileset) throw new Error(`unknown tileset: ${def.tileset} (map ${name})`);
     return new GameMap(def, tileset);
   });
+  const cookedMaps = new Set(mapNames);
 
   if (redpp) {
     const needExceptions = Redpp.mapExceptions([...mapNames]);
@@ -216,6 +227,24 @@ export function cookVoxelPak(
 
   for (let mi = 0; mi < maps.length; mi++) {
     const map = maps[mi];
+    const masks: BorderMask[] = [];
+    for (const [direction, connection] of Object.entries(map.def.connections ?? {})) {
+      if (!cookedMaps.has(connection.map)) continue;
+      const destination = gen.maps[connection.map];
+      if (!destination) continue;
+      const { ox, oy } = placeDirectNeighbour(
+        direction as ConnectionDirection,
+        connection,
+        map.def,
+        destination,
+      );
+      masks.push({
+        x0: ox,
+        z0: oy,
+        x1: ox + destination.width * 32,
+        z1: oy + destination.height * 32,
+      });
+    }
     let analysis: ReturnType<typeof analyseMap> | null = analyseMap(
       gen,
       map,
@@ -223,7 +252,12 @@ export function cookVoxelPak(
       buildingStats,
       options.treeBoxes ?? false,
     );
-    let geometry: MapGeometry | null = runGeometry(map, analysis, options.keepHidden ?? false);
+    let geometry: MapGeometry | null = runGeometry(
+      map,
+      analysis,
+      masks,
+      options.keepHidden ?? false,
+    );
     // runGeometry has consumed every analysis product into its own streams.
     // Drop the large grids before ground baking this map.
     analysis = null;
@@ -369,7 +403,7 @@ export function cookVoxelPak(
     uiPage,
     terrainPage,
   };
-  const gameJson = buildGamedata(gen, atlas, [...mapNames]);
+  const gameJson = buildGamedata(gen, atlas, [...mapNames], profile);
   const glyphs = buildCharmap(gen);
   const treeLod = packedMaps.some((map) =>
     map.chunks.some((chunk) => chunk.meshes[MESH_KIND.treeBox].indices.length > 0),

@@ -163,6 +163,17 @@ pub unsafe fn take_map_swapped() -> bool {
 op_fn!(js_cam, op::CAM, 2);
 op_fn!(js_pitch, op::PITCH, 1);
 op_fn!(js_tint, op::TINT, 1);
+unsafe extern "C" fn js_sky(
+    ctx: *mut JSContext,
+    _this: JSValue,
+    argc: i32,
+    argv: *mut JSValue,
+) -> JSValue {
+    if argc < 1 {
+        return JS_UNDEFINED;
+    }
+    dispatch::<1>(ctx, argc, argv, op::SKY)
+}
 op_fn!(js_stamp, op::STAMP, 4);
 op_fn!(js_palette, op::PALETTE, 1);
 op_fn!(js_ent, op::ENT, 7);
@@ -311,6 +322,7 @@ pub unsafe fn register(ctx: *mut JSContext, global: JSValue) {
     add_fn(ctx, obj, b"cam\0", js_cam, 2);
     add_fn(ctx, obj, b"pitch\0", js_pitch, 1);
     add_fn(ctx, obj, b"tint\0", js_tint, 1);
+    add_fn(ctx, obj, b"sky\0", js_sky, 1);
     add_fn(ctx, obj, b"stamp\0", js_stamp, 4);
     add_fn(ctx, obj, b"palette\0", js_palette, 1);
     add_fn(ctx, obj, b"ent\0", js_ent, 7);

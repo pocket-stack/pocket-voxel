@@ -375,7 +375,7 @@ describe("Pocket Voxel web pipeline UX", () => {
     const wrangler = await Bun.file("wrangler.jsonc").json();
     expect(wrangler.name).toBe("pocket-voxel-web");
     expect(wrangler.main).toBe("./worker/entry.ts");
-    expect(wrangler.compatibility_date).toBe("2026-08-11");
+    expect(wrangler.compatibility_date).toBe("2026-08-12");
     expect(wrangler.assets).toEqual({
       directory: "./dist/web",
       binding: "ASSETS",
@@ -609,7 +609,7 @@ describe("Pocket Voxel web pipeline UX", () => {
       vita: { files: { id: string; path: string; bytes: number; sha256: string }[] };
     };
     expect(manifest.schemaVersion).toBe(1);
-    expect(manifest.vxpkVersion).toBe(8);
+    expect(manifest.vxpkVersion).toBe(9);
     const guest = await Bun.build({
       entrypoints: ["voxelmon/game/psp-main.ts"],
       target: "browser",

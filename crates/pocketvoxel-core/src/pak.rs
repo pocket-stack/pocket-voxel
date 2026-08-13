@@ -75,8 +75,9 @@
 //!        i16 cx | i16 cy                      chunk coords (world px =
 //!                                             c * CHUNK_PX, map-local)
 //!        i16 min_x,min_y,min_z,max_x,max_y,max_z   AABB, map-local world px
-//!        u16 bake_page | u16 pad = 0     baked-ground atlas page, or
-//!                                        BAKE_PAGE_NONE (v6)
+//!        u16 bake_page | u16 flags       baked-ground atlas page, or
+//!                                        BAKE_PAGE_NONE; flags bit 0 marks
+//!                                        a current-map-only border ring (v9)
 //!        MESH_KINDS mesh ranges in mesh_kind order (terrain, groundBake,
 //!        treeHull, treeCoarse, treeBox, water, grass, flower):
 //!          u32 vert_base | u16 vert_count | u16 index_count | u32 index_base
@@ -268,6 +269,8 @@ pub struct Chunk {
     /// `spec::BAKE_PAGE_NONE` — this chunk is ineligible and always draws
     /// its geometry.
     pub bake_page: u16,
+    /// `spec::VXPK_CHUNK_FLAG_*` bits validated by the reader.
+    pub flags: u16,
     /// Indexed by `spec::mesh_kind` (terrain, groundBake, treeHull,
     /// treeCoarse, treeBox, water, grass, flower).
     pub meshes: [MeshRange; MESH_KINDS],
@@ -814,8 +817,9 @@ pub fn read(data: &[u8]) -> Result<Pak<'_>, ReadError> {
                 return Err("chunk AABB is inverted");
             }
             let bake_page = r.u16v()?;
-            if r.u16v()? != 0 {
-                return Err("chunk record pad is not zero");
+            let flags = r.u16v()?;
+            if flags & !spec::VXPK_CHUNK_FLAG_BORDER_RING != 0 {
+                return Err("chunk record has unknown flags");
             }
             if bake_page != spec::BAKE_PAGE_NONE && bake_page as u32 >= meta.atlas_count {
                 return Err("chunk bake page out of range");
@@ -831,6 +835,7 @@ pub fn read(data: &[u8]) -> Result<Pak<'_>, ReadError> {
                 aabb_min,
                 aabb_max,
                 bake_page,
+                flags,
                 meshes,
             });
         }
@@ -1062,6 +1067,7 @@ pub(crate) mod tests {
                 aabb_min: [0, 0, 0],
                 aabb_max: [128, 0, 128],
                 bake_page: spec::BAKE_PAGE_NONE,
+                flags: 0,
                 meshes: [
                     terrain,
                     MeshRange::default(),
@@ -1121,6 +1127,7 @@ pub(crate) mod tests {
                 aabb_min: [0, 0, 0],
                 aabb_max: [128, 0, 128],
                 bake_page: spec::BAKE_PAGE_NONE,
+                flags: 0,
                 meshes: [
                     terrain,
                     MeshRange::default(),
@@ -1219,6 +1226,7 @@ pub(crate) mod tests {
         let map = pak.find_map(7).expect("map 7");
         assert_eq!(pak.chunks_of(map).len(), 1);
         let chunk = &pak.chunks_of(map)[0];
+        assert_eq!(chunk.flags, 0);
         assert_eq!(chunk.meshes[0].vert_count, 4);
         assert_eq!(chunk.meshes[0].index_count, 6);
         assert!(pak.find_stamp(7, 2, 2).is_some());
@@ -1314,6 +1322,21 @@ pub(crate) mod tests {
             }
         }
         let chnk = chnk_off.expect("CHNK present");
+        let chunk_record = chnk + 32 + 12; // one map-directory record
+
+        // Bit 0 is the only defined v9 chunk flag; the former pad must not
+        // become an extension hole where corrupt/newer records load silently.
+        let mut b = good.clone();
+        b[chunk_record + 18..chunk_record + 20]
+            .copy_from_slice(&spec::VXPK_CHUNK_FLAG_BORDER_RING.to_le_bytes());
+        let blob = AlignedBlob::from_bytes(&b);
+        assert_eq!(
+            read(blob.bytes()).unwrap().chunks[0].flags,
+            spec::VXPK_CHUNK_FLAG_BORDER_RING
+        );
+        let mut b = good.clone();
+        b[chunk_record + 18..chunk_record + 20].copy_from_slice(&0x8000u16.to_le_bytes());
+        must_err(&b, "unknown chunk flag");
 
         // chunk_total inflated: directory + record reads must fail, not index OOB.
         let mut b = good.clone();
