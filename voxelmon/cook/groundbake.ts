@@ -14,7 +14,11 @@
 // with affine UV and a per-texel depth key (y, then z; larger wins — the
 // first hit along the down-north view ray).
 
-import { CHUNK_PX, PITCH_RUNGS } from "../../contracts/spec/voxel-spec.ts";
+import {
+  CHUNK_PX,
+  PITCH_RUNGS,
+  VXPK_CHUNK_FLAG_BORDER_RING,
+} from "../../contracts/spec/voxel-spec.ts";
 import type { PageDef } from "./atlas.ts";
 import type { Quad } from "./geom.ts";
 import type { ChunkOut, MapGeometry, UvTransform } from "./mesh.ts";
@@ -66,11 +70,14 @@ export function bakeGround(
   // texels per pixel (measured: painting them pushed the GE-vs-sim e2e to
   // AE 16k on ROUTE_1; terrain tiles are low-frequency and agree). Grass
   // and flowers keep drawing as geometry over the bake, on their own dials.
-  const quads: Quad[] = [...geo.terrain];
+  const quads: Quad[] = geo.terrain.filter((quad) => !quad.borderRing);
   const out = new Map<number, Uint8Array>();
 
   for (let ci = 0; ci < chunks.length; ci++) {
     const c = chunks[ci];
+    // The ring is protective current-map scenery, never a far-field ground
+    // painting. Its geometry remains in the flagged record for slot 0.
+    if ((c.flags ?? 0) & VXPK_CHUNK_FLAG_BORDER_RING) continue;
     const x0 = c.cx * CHUNK_PX;
     const z0 = c.cy * CHUNK_PX;
     const best: (Sample | undefined)[] = new Array(BAKE_TEXELS * BAKE_TEXELS);

@@ -38,6 +38,8 @@ export interface Quad {
   f: Facing;
   /** A body-anchored building's own quad — exempt from edge keep-rules. */
   own?: boolean;
+  /** Geometry from the protective map border, emitted into a slot-0-only chunk. */
+  borderRing?: boolean;
   /**
    * A carved round-scenery (tree) quad. It rides the TERRAIN stream through
    * the whole cook — analysis, culling, chunk partition and batching — and
