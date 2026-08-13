@@ -58,7 +58,7 @@ cook time (Bun, your machine)            run time (PSP / PS Vita)
 ```
 
 - **One pak, many machines.** Fidelity is a runtime *ladder*, not a build
-  flag: the same 31 MB pak serves the PSP rung (30 fps present lock, 60 Hz
+  flag: the same 29.7 MB pak serves the PSP rung (30 fps present lock, 60 Hz
   logic), the Vita rung, and the desktop identity rung — which replays the
   pre-ladder picture pixel-for-pixel and is pinned by committed frame hashes
   no dial edit may move. **The rung is named by the HOST, not the guest**, so
