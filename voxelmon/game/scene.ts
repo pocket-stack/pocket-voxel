@@ -14,6 +14,7 @@ import { desiredCards, type BattleStaging } from "./battle/staging.ts";
 import type { BattleUi } from "./battle/ui.ts";
 import type { VoxelmonData } from "./data.ts";
 import type { VoxelHost } from "./host.ts";
+import { isOutdoor } from "./world/map.ts";
 import { computeNeighbors, type Overworld } from "./world/overworld.ts";
 import { NPC } from "./world/npc.ts";
 import type { Textbox } from "./world/textbox.ts";
@@ -262,6 +263,10 @@ export class Scene {
       }
       this.mapSlots[slot] = key;
     }
+    // VoxelScene.skyColor/skyFor: an interior has no sky. This is retained
+    // map state, so one op rides the same map-identity burst as mapShow and
+    // the unchanged-map fast path above emits nothing on later ticks.
+    this.host.sky(isOutdoor(ow.map.def) ? 1 : 0);
     // The current map's SGB palette (gamedata mapPalette — the cooker's
     // port of SetPal_Overworld), delta-emitted like the slots above: one
     // palette op whenever the slot-0 map changes it. -1 = grayscale ramp.

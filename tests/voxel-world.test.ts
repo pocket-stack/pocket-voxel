@@ -33,7 +33,7 @@ import { RecorderHost } from "../voxelmon/game/host.ts";
 import { Input } from "../voxelmon/game/input.ts";
 import { Scene, type SceneView } from "../voxelmon/game/scene.ts";
 import { encodeGlyphs, glyphLen, MAX_COLS } from "../voxelmon/game/ui/tiles.ts";
-import { GameMap } from "../voxelmon/game/world/map.ts";
+import { GameMap, isOutdoor } from "../voxelmon/game/world/map.ts";
 import { NPC } from "../voxelmon/game/world/npc.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
 import { Player } from "../voxelmon/game/world/player.ts";
@@ -262,6 +262,13 @@ describe("textbox machine", () => {
 // Layer 2 — cell semantics vs the reference facts (content_red/facts.lua)
 // ---------------------------------------------------------------------------
 
+test("Map.isOutdoor honors explicit data before the legacy tileset fallback", () => {
+  expect(isOutdoor({ tileset: "OVERWORLD", outdoor: false } as MapDef)).toBe(false);
+  expect(isOutdoor({ tileset: "HOUSE", outdoor: true } as MapDef)).toBe(true);
+  expect(isOutdoor({ tileset: "OVERWORLD" } as MapDef)).toBe(true);
+  expect(isOutdoor({ tileset: "HOUSE" } as MapDef)).toBe(false);
+});
+
 describe("cell semantics (facts.lua ground truth)", () => {
   const map = (id: string): GameMap => {
     const def = romData!.maps![id];
@@ -275,6 +282,15 @@ describe("cell semantics (facts.lua ground truth)", () => {
     expect(map("VIRIDIAN_CITY").heightCells).toBe(36);
     expect(map("OAKS_LAB").widthCells).toBe(10);
     expect(map("OAKS_LAB").heightCells).toBe(12);
+  });
+
+  test.skipIf(!hasGen)("the four shipped rooms have no sky while surface maps do", () => {
+    for (const id of ["REDS_HOUSE_1F", "REDS_HOUSE_2F", "OAKS_LAB", "BLUES_HOUSE"]) {
+      expect(isOutdoor(romData!.maps![id]!)).toBe(false);
+    }
+    for (const id of ["PALLET_TOWN", "ROUTE_1", "VIRIDIAN_CITY"]) {
+      expect(isOutdoor(romData!.maps![id]!)).toBe(true);
+    }
   });
 
   test.skipIf(!hasGen)("Pallet walkability + warp + sign (facts.lua:32-38)", () => {
@@ -429,6 +445,44 @@ describe("entity terrain support (VoxelScene.groundAt)", () => {
       expect(checked).toBe(8);
     },
   );
+});
+
+describe("scene sky visibility", () => {
+  test.skipIf(!hasGen)("emits once per map identity in the mapShow tick", () => {
+    const host = new RecorderHost();
+    const game = new VoxelmonGame(romData!, host, 1);
+    game.newGame();
+
+    const visit = (id: string): void => {
+      game.overworld.setMap(id, 1, 1, "down");
+      game.tick(0);
+      game.tick(0); // unchanged identity must not repeat the retained op
+    };
+
+    game.tick(0); // boot map: REDS_HOUSE_2F
+    game.tick(0); // unchanged boot map
+    for (const id of ["REDS_HOUSE_1F", "OAKS_LAB", "BLUES_HOUSE"]) visit(id);
+    for (const id of ["PALLET_TOWN", "ROUTE_1", "VIRIDIAN_CITY"]) visit(id);
+
+    const sky = host.text()
+      .split("\n")
+      .filter((line) => line.startsWith(`o ${VOX_OP.sky} `));
+    expect(sky).toEqual([
+      `o ${VOX_OP.sky} 0`,
+      `o ${VOX_OP.sky} 0`,
+      `o ${VOX_OP.sky} 0`,
+      `o ${VOX_OP.sky} 0`,
+      `o ${VOX_OP.sky} 1`,
+      `o ${VOX_OP.sky} 1`,
+      `o ${VOX_OP.sky} 1`,
+    ]);
+
+    const lines = host.text().split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i]!.startsWith(`o ${VOX_OP.mapShow} 0 `)) continue;
+      expect(lines.slice(i, i + 8).some((line) => line.startsWith(`o ${VOX_OP.sky} `))).toBe(true);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

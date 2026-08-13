@@ -131,8 +131,7 @@ export function defPassable(
 
 /** Map.lua:148 isOutdoor — town/route surface (door SFX, walk-out step). */
 export function isOutdoor(def: MapDef): boolean {
-  const d = def as unknown as { outdoor?: boolean };
-  if (d.outdoor !== undefined) return d.outdoor;
+  if (def.outdoor !== undefined) return def.outdoor;
   return def.tileset === "OVERWORLD";
 }
 

@@ -191,6 +191,9 @@ export interface MapDef {
   warps: MapWarp[];
   objects: MapObject[];
   signs: MapSign[];
+  /** Explicit Map.isOutdoor classification; legacy data falls back to the
+   * OVERWORLD tileset convention. */
+  outdoor?: boolean;
   source?: string;
 }
 
