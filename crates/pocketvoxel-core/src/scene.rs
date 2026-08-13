@@ -57,7 +57,7 @@ pub struct Ent {
     /// World px, Q4 fixed (value = px * 16).
     pub x: i32,
     pub y: i32,
-    /// World px above ground (the card's feet height).
+    /// Absolute feet height above the map's base plane, in world px.
     pub lift: i32,
     pub flags: u32,
     /// `spec::emote` kind; 0 = none.

@@ -509,7 +509,9 @@ export const EMOTE = {
 //                                          capability, not a guest concern:
 //                                          the wire is unchanged either way
 //   entities
-//     ent(slot, sheet, frame, x, y, lift, flags)   x/y world px Q4; lift px
+//     ent(slot, sheet, frame, x, y, lift, flags)   x/y world px Q4; lift =
+//                                                  absolute feet height above
+//                                                  the map plane, px
 //     entHide(slot)
 //     emote(slot, kind)                    EMOTE; kind 0 clears
 //   ui (the GB tile layer; tile ids index the cooked UI atlas)

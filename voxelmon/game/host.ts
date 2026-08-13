@@ -28,7 +28,7 @@ export interface VoxelHost {
    * atlas kinds; -1 restores the GB grayscale ramp. */
   palette(index: number): void;
   // entities
-  /** x/y world px Q4; lift px; flags = ENT_FLAG mask. */
+  /** x/y world px Q4; lift = absolute feet height above the map plane, px. */
   ent(
     slot: number,
     sheet: number,

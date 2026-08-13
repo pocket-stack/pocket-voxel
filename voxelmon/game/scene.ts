@@ -356,7 +356,7 @@ export class Scene {
         frame,
         p.px * Q4,
         p.py * Q4,
-        p.hopLift(),
+        ow.map.groundAt(p.cellX, p.cellY) + p.hopLift(),
         flags,
       );
     }
@@ -384,7 +384,7 @@ export class Scene {
         frame,
         npc.px * Q4,
         npc.py * Q4,
-        0,
+        ow.map.groundAt(npc.cellX, npc.cellY),
         flags,
       );
     }

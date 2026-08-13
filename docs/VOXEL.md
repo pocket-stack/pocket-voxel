@@ -151,7 +151,8 @@ drift guard — the `mon-spec.ts` discipline unchanged. Op groups:
 - **entities** — `ent(slot, sheet, frame, x, y, lift, flags)`, `entHide`,
   `emote(slot, kind)`. Billboards lean back by camera pitch and pull toward
   the eye along each vertex's own ray — the mod's projection-invariant depth
-  bias, ported exactly.
+  bias, ported exactly. `lift` is the entity's absolute feet height above the
+  map plane: the tile's cooked support height plus any active hop lift.
 - **ui** — `uiTile(x, y, tile)`, `uiFill(x, y, w, h, tile)`,
   `uiText(x, y, str)` (glyphs resolved core-side through the cooked charmap),
   `uiReveal(n)`, `uiClear()`. The GB UI is a retained tile layer composited

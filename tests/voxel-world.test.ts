@@ -14,16 +14,29 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { VOX_BTN, VOX_OP } from "../contracts/spec/voxel-spec.ts";
+import { DEFAULT_MAPS } from "../voxelmon/cook/core.ts";
+import { loadGen, loadProfile, voxelmodDir } from "../voxelmon/cook/data-node.ts";
+import { buildGamedata } from "../voxelmon/cook/gamedata.ts";
 import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
-import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
+import {
+  fromObject,
+  loadRuntimeData,
+  REQUIRED_MODULES,
+  type MapDef,
+  type TilesetDef,
+  type VoxelmonData,
+} from "../voxelmon/game/data.ts";
 import { seqRng } from "../voxelmon/game/rng.ts";
 import { ENCOUNTER_BUCKETS } from "../voxelmon/game/rules/encounter.ts";
 import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { Input } from "../voxelmon/game/input.ts";
+import { Scene, type SceneView } from "../voxelmon/game/scene.ts";
 import { encodeGlyphs, glyphLen, MAX_COLS } from "../voxelmon/game/ui/tiles.ts";
 import { GameMap } from "../voxelmon/game/world/map.ts";
+import { NPC } from "../voxelmon/game/world/npc.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
+import { Player } from "../voxelmon/game/world/player.ts";
 import { paginate, Textbox } from "../voxelmon/game/world/textbox.ts";
 import { parseTape, TapePlayer, TapeStallError } from "../voxelmon/game/sim/tape.ts";
 
@@ -34,6 +47,50 @@ if (!hasGen) {
   console.log("[voxel-world] dist/voxelmon/gen absent (run `bun tools/voxel.ts import`) — ROM-gated suites skipped");
 }
 const romData: VoxelmonData | null = hasGen ? await loadRuntimeData(genDir) : null;
+const hasGroundProfile =
+  hasGen &&
+  existsSync(join(voxelmodDir(), "data/voxel_heights.lua")) &&
+  Bun.which("luajit") !== null;
+
+function entArgs(host: RecorderHost): number[][] {
+  return host
+    .text()
+    .split("\n")
+    .filter((line) => line.startsWith(`o ${VOX_OP.ent} `))
+    .map((line) => line.split(" ").slice(2).map(Number));
+}
+
+function supportFixture(groundHeights?: number[]): { map: GameMap; def: MapDef } {
+  const block = new Array(16).fill(0);
+  block[4] = 0;
+  block[6] = 1;
+  block[12] = 2;
+  block[14] = 3;
+  const def: MapDef = {
+    id: "SUPPORT_TEST",
+    index: 1,
+    label: "support test",
+    tileset: "SUPPORT_TEST",
+    width: 1,
+    height: 1,
+    blocks: [0],
+    borderBlock: 0,
+    connections: {},
+    warps: [],
+    objects: [],
+    signs: [],
+  };
+  const tileset: TilesetDef = {
+    id: "SUPPORT_TEST",
+    blocks: [block],
+    walkable: [true, true, true, true],
+    counterTiles: [],
+    doorTiles: [],
+    warpTiles: [],
+    groundHeights,
+  };
+  return { map: new GameMap(def, tileset), def };
+}
 
 function makeGame(seed = 1): VoxelmonGame {
   const game = new VoxelmonGame(romData!, new RecorderHost(), seed);
@@ -252,6 +309,126 @@ describe("cell semantics (facts.lua ground truth)", () => {
     expect(lab.isWarpTileCell(5, 11)).toBe(false);
     expect(lab.warpAtCell(5, 11)?.def.destMap).toBe("LAST_MAP");
   });
+});
+
+describe("entity terrain support (VoxelScene.groundAt)", () => {
+  test("rejects off-map, missing, invalid, and non-positive support heights", () => {
+    const { map } = supportFixture([5, Number.NaN, -2]);
+    expect(map.groundAt(0, 0)).toBe(5);
+    expect(map.groundAt(1, 0)).toBe(0); // non-finite
+    expect(map.groundAt(0, 1)).toBe(0); // recessed/non-positive
+    expect(map.groundAt(1, 1)).toBe(0); // tile index outside the table
+    expect(map.groundAt(-1, 0)).toBe(0); // borderBlock must not lift a seam step
+    expect(map.groundAt(0, 2)).toBe(0);
+    expect(supportFixture().map.groundAt(0, 0)).toBe(0); // raw/old GAME data
+  });
+
+  test("scene adds hop lift to the source cell and anchors NPC/item cards", () => {
+    const { map, def } = supportFixture([5, 6, 0, 0]);
+    const player = new Player(0, 0, "right");
+    player.hopFrames = 8;
+    player.hopTotal = 16; // midpoint = 10 px hop
+    player.moving = true;
+    player.targetX = 1;
+    player.targetY = 0;
+    const npc = new NPC(
+      def.id,
+      {
+        index: 1,
+        name: "TABLE_ITEM",
+        sprite: "SPRITE_POKE_BALL",
+        movement: "STAY",
+        range: "NONE",
+        text: "TEXT_ITEM",
+        x: 1,
+        y: 0,
+      },
+      seqRng(0),
+    );
+    const host = new RecorderHost();
+    const scene = new Scene(host);
+    const view = {
+      data: {
+        maps: { [def.id]: def },
+        cookedMaps: [def.id],
+        sprites: { SPRITE_RED: { id: "SPRITE_RED", frames: 6 } },
+        atlas: { sprites: { red: 2, poke_ball: 3 } },
+      },
+      overworld: { map, player, npcs: [npc], emote: undefined },
+      uiBox: () => null,
+      uiChoice: () => null,
+      battleView: () => null,
+    } as unknown as SceneView;
+
+    scene.emit(view);
+    host.frameDone(0, 0);
+    player.px = 8; // halfway to cell 1, but cellX is still the source cell
+    scene.emit(view);
+    host.frameDone(1, 0);
+    player.cellX = 1; // landing switches the support tile
+    player.px = 16;
+    scene.emit(view);
+    host.frameDone(2, 0);
+
+    const ops = entArgs(host);
+    expect(ops.filter((args) => args[0] === 0).map((args) => args[5])).toEqual([15, 15, 16]);
+    expect(ops.find((args) => args[0] === 1)?.[5]).toBe(6);
+  });
+
+  test.skipIf(!hasGroundProfile)(
+    "ROM profile lifts Mom, Daisy, starter balls, Pokédexes, and the town map",
+    () => {
+      const gen = loadGen(genDir);
+      const profile = loadProfile();
+      expect(profile).not.toBeNull();
+      const gameData = fromObject(
+        JSON.parse(
+          new TextDecoder().decode(
+            buildGamedata(
+              gen,
+              {
+                sprites: {},
+                picFront: {},
+                picBack: {},
+                emotePage: null,
+                uiPage: 1,
+                terrainPage: 0,
+              },
+              [...DEFAULT_MAPS],
+              profile,
+            ),
+          ),
+        ),
+      );
+      const expected: Record<string, Record<string, number>> = {
+        REDS_HOUSE_1F: { REDSHOUSE1F_MOM: 5 },
+        BLUES_HOUSE: { BLUESHOUSE_DAISY1: 5, BLUESHOUSE_TOWN_MAP: 6 },
+        OAKS_LAB: {
+          OAKSLAB_CHARMANDER_POKE_BALL: 6,
+          OAKSLAB_SQUIRTLE_POKE_BALL: 6,
+          OAKSLAB_BULBASAUR_POKE_BALL: 6,
+          OAKSLAB_POKEDEX1: 6,
+          OAKSLAB_POKEDEX2: 6,
+        },
+      };
+      let checked = 0;
+      for (const [mapId, objects] of Object.entries(expected)) {
+        const host = new RecorderHost();
+        const game = new VoxelmonGame(gameData, host, 1);
+        game.newGame();
+        game.overworld.setMap(mapId, 0, 0, "down");
+        game.tick(0);
+        const bySlot = new Map(entArgs(host).map((args) => [args[0], args]));
+        for (const [name, height] of Object.entries(objects)) {
+          const slot = game.overworld.npcs.findIndex((npc) => npc.def.name === name) + 1;
+          expect(slot, `${mapId}:${name} must be a visible object`).toBeGreaterThan(0);
+          expect(bySlot.get(slot)?.[5], `${mapId}:${name}`).toBe(height);
+          checked += 1;
+        }
+      }
+      expect(checked).toBe(8);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
