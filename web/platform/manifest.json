@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "vxpkVersion": 9,
-  "sourceRevision": "517cbe4d2e60bebd5a5eeac79dd80ce66d9124f0",
+  "sourceRevision": "8d9645b80d368fa4610858e0bf40830bbd78bb21",
   "guestSha256": "a3044a94105dea2f47773ad25e1a6529b843fd2c1d06b75c866c02712387977a",
   "psp": {
     "modelRequirement": "PSP-2000 or newer with CFW, or PPSSPP",
