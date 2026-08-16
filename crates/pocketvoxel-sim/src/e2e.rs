@@ -69,6 +69,7 @@ fn build_pak() -> Vec<u8> {
             aabb_min: [0, 0, 0],
             aabb_max: [128, 0, 128],
             bake_page: pocketvoxel_core::spec::BAKE_PAGE_NONE,
+            flags: 0,
             meshes: [
                 ground,
                 MeshRange::default(),
@@ -143,6 +144,24 @@ fn sgb_palette_recolors_non_ui_kinds() {
 
     let oob = hash("voxtrace 1\nt 0 0\no 10 0 7 0 0\no 12 1024 1088\no 16 99\nm f\n");
     assert_eq!(oob, gray, "an out-of-range selection falls back to the ramp");
+}
+
+#[test]
+fn hidden_sky_rasterizes_as_a_tint_independent_black_clear() {
+    let bytes = build_pak();
+    let blob = AlignedBlob::from_bytes(&bytes);
+    let pak = pak::read(blob.bytes()).expect("valid pak");
+    let cache = AtlasCache::new(&pak);
+    let hash = |tape: &str| {
+        let entries = trace::parse(tape).unwrap();
+        trace::run(&pak, &cache, &entries, QUALITY, None, |_, _| {}).unwrap()[0].1
+    };
+
+    let visible = hash("voxtrace 1\nt 0 0\nm f\n");
+    let hidden = hash("voxtrace 1\nt 0 0\no 75 0\nm f\n");
+    let hidden_tinted = hash("voxtrace 1\nt 0 0\no 14 1082097728\no 75 0\nm f\n");
+    assert_ne!(visible, hidden, "hiding the sky changes the rasterized void");
+    assert_eq!(hidden, hidden_tinted, "the opaque-black clear ignores day tint");
 }
 
 /// The CLI loop over real files: write hashes, replay with `--assert`,

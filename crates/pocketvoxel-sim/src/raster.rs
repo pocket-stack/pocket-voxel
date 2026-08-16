@@ -180,6 +180,10 @@ struct TexCtx<'a> {
     w: usize,
     h: usize,
     pal: &'a [u32; 256],
+    /// Replace every alpha-tested-in texel with one flat ABGR color. The
+    /// player's occlusion ghost uses the sprite page only as a silhouette
+    /// mask; ordinary textured draws keep the palette color with `None`.
+    solid: Option<u32>,
 }
 
 impl TexCtx<'_> {
@@ -194,7 +198,7 @@ impl TexCtx<'_> {
         if (c >> 24) & 0xff < 0x80 {
             None
         } else {
-            Some(c)
+            Some(self.solid.unwrap_or(c))
         }
     }
 }
@@ -451,6 +455,7 @@ pub fn render(list: &DrawList, pak: &Pak, cache: &AtlasCache) -> Frame {
             w: page.w,
             h: page.h,
             pal: tinted.get(pal_index(m.page, page.kind, m.pal))?,
+            solid: None,
         })
     };
 
@@ -524,21 +529,52 @@ pub fn render(list: &DrawList, pak: &Pak, cache: &AtlasCache) -> Frame {
                 });
             }
 
-            Item::Ghost { verts, pull, abgr } => {
-                let rgba = abgr_to_rgba_f(*abgr);
+            Item::Ghost {
+                verts,
+                page,
+                uv,
+                mirror,
+                pull,
+                abgr,
+            } => {
+                let Some(cp) = cache.pages.get(*page as usize) else {
+                    continue;
+                };
+                let tex = TexCtx {
+                    texels: &cp.frames[0],
+                    w: cp.w,
+                    h: cp.h,
+                    pal: &tinted[pal_index(*page, cp.kind, COLOR_PAL_NONE)],
+                    solid: Some(*abgr),
+                };
+                let (u0, u1) = if *mirror {
+                    (uv[2], uv[0])
+                } else {
+                    (uv[0], uv[2])
+                };
+                let (v0, v1) = (uv[1], uv[3]);
+                let uvs = [(u0, v1), (u1, v1), (u1, v0), (u0, v0)];
+                let white = [255.0f32; 4];
                 let quad: [PV; 4] = core::array::from_fn(|i| {
-                    to_clip(
+                    to_clip_opts(
                         vp,
                         eye,
                         vec3(verts[i][0], verts[i][1], verts[i][2]),
                         *pull,
-                        0.0,
-                        0.0,
-                        rgba,
+                        uvs[i].0,
+                        uvs[i].1,
+                        white,
+                        true,
                     )
                 });
                 quad_tris(quad, |t| {
-                    draw_clip_tri(&mut frame, t, None, DepthMode::GreaterNoWrite, true)
+                    draw_clip_tri(
+                        &mut frame,
+                        t,
+                        Some(&tex),
+                        DepthMode::GreaterNoWrite,
+                        true,
+                    )
                 });
             }
 
@@ -560,6 +596,7 @@ pub fn render(list: &DrawList, pak: &Pak, cache: &AtlasCache) -> Frame {
                     // CLUT and a battle pic's species CLUT are properties of
                     // the PAGE, so resolve_pal reads them from VCOL itself.
                     pal: &tinted[pal_index(*page, cp.kind, COLOR_PAL_NONE)],
+                    solid: None,
                 };
                 let (u0, u1) = if *mirror {
                     (uv[2], uv[0])
@@ -714,6 +751,7 @@ mod tests {
             w: 2,
             h: 1,
             pal: &pal,
+            solid: None,
         };
         let q = ndc_quad(-0.5, -0.5, 0.5, 0.5, 0.0, [255.0; 4]);
         draw_quad(&mut f, q, Some(&tex), DepthMode::LessWrite, false);
@@ -738,6 +776,44 @@ mod tests {
         assert_eq!(right, 0xff00_0000, "ghost skipped the open side");
         // No depth writes from the ghost pass.
         assert_eq!(f.depth[136 * W + 280], f32::INFINITY);
+    }
+
+    #[test]
+    fn ghost_texture_is_a_flat_silhouette_mask() {
+        let mut f = Frame::new();
+        let grey = [64.0, 64.0, 64.0, 255.0];
+        let occ = ndc_quad(-1.0, -1.0, 1.0, 1.0, 0.0, grey);
+        draw_quad(&mut f, occ, None, DepthMode::LessWrite, false);
+
+        let mut pal = [0xff00_ff00u32; 256];
+        pal[0] = 0x0000_0000;
+        pal[1] = 0xff00_00ff;
+        pal[2] = 0xffff_0000;
+        let texels = [0u8, 1, 2];
+        let ghost_abgr = 0x8048_4242;
+        let tex = TexCtx {
+            texels: &texels,
+            w: 3,
+            h: 1,
+            pal: &pal,
+            solid: Some(ghost_abgr),
+        };
+        let ghost = ndc_quad(-0.75, -0.5, 0.75, 0.5, 0.5, [255.0; 4]);
+        draw_quad(
+            &mut f,
+            ghost,
+            Some(&tex),
+            DepthMode::GreaterNoWrite,
+            true,
+        );
+
+        let left = f.color[136 * W + 150];
+        let middle = f.color[136 * W + 240];
+        let right = f.color[136 * W + 330];
+        assert_eq!(left, 0xff40_4040, "transparent card texels stay invisible");
+        assert_eq!(middle, right, "source sprite colors flatten to one silhouette");
+        assert_ne!(middle, 0xff40_4040, "opaque sprite texels reveal the ghost");
+        assert!(f.depth[136 * W + 240] < 0.5, "ghost never replaces occluder depth");
     }
 
     #[test]

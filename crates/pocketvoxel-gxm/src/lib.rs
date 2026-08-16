@@ -74,7 +74,7 @@ pub const PHYSICAL_H: i32 = VIEW_H * 2;
 /// (12288 vertices), which is the largest CPU-built pass.
 const SEQUENTIAL_INDICES: usize = 16384;
 
-/// CPU-built untextured vertex: sky bands, shadow decals, the ghost.
+/// CPU-built untextured vertex for sky bands and shadow decals.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct FlatVert {
@@ -309,11 +309,27 @@ impl Renderer {
                     self.mesh(pipeline, pak, mesh, mesh_kind::TERRAIN, list.cam.eye, &vp)
                 }
                 Item::ShadowDecal { corners, abgr } => {
-                    self.flat_quad(pipeline, &vp, *corners, *abgr, list.cam.eye, 0.0, false)
+                    self.flat_quad(pipeline, &vp, *corners, *abgr, list.cam.eye, 0.0)
                 }
-                Item::Ghost { verts, pull, abgr } => {
-                    self.flat_quad(pipeline, &vp, *verts, *abgr, list.cam.eye, *pull, true)
-                }
+                Item::Ghost {
+                    verts,
+                    page,
+                    uv,
+                    mirror,
+                    pull,
+                    abgr,
+                } => self.ghost(
+                    pipeline,
+                    pak,
+                    &vp,
+                    *verts,
+                    *page,
+                    *uv,
+                    *mirror,
+                    *pull,
+                    *abgr,
+                    list.cam.eye,
+                ),
                 Item::Card {
                     verts,
                     page,
@@ -378,7 +394,15 @@ impl Renderer {
     /// Bind one atlas page frame through the palette the core resolved.
     /// `resolve_pal` is shared with the software rasterizer and the GE
     /// backend, so all three sample the same CLUT for the same draw.
-    unsafe fn bind(&mut self, pak: &Pak, page_idx: u16, frame: u16, tinted: bool, pal: u16) -> bool {
+    unsafe fn bind(
+        &mut self,
+        pak: &Pak,
+        page_idx: u16,
+        frame: u16,
+        tinted: bool,
+        pal: u16,
+        solid: Option<u32>,
+    ) -> bool {
         let Some(page) = pak.atlases.get(page_idx as usize) else {
             return false;
         };
@@ -387,6 +411,7 @@ impl Renderer {
             frame: frame % page.frames.max(1),
             pal: resolve_pal(pak, page_idx, page.kind, pal, self.palette) as u16,
             tinted,
+            solid,
         };
         if self.bound == Some(key) {
             return true;
@@ -452,7 +477,7 @@ impl Renderer {
         eye: Vec3,
         vp: &Mat4,
     ) {
-        if m.index_count == 0 || !self.bind(pak, m.page, m.frame, true, m.pal) {
+        if m.index_count == 0 || !self.bind(pak, m.page, m.frame, true, m.pal, None) {
             return;
         }
         let projection = if m.pull_bias != 0.0 {
@@ -533,9 +558,9 @@ impl Renderer {
         }
     }
 
-    /// Flat-colour blended quad: shadow decals (depth-tested, never written)
-    /// and the player ghost (`ghost = true`: `GREATER`, so it draws only where
-    /// something nearer already wrote depth — the GE's inverted `Less`).
+    /// Flat-colour blended quad for a shadow decal (depth-tested, never
+    /// written). The player ghost is textured separately so its transparent
+    /// card pixels cannot become a visible rectangle.
     #[allow(clippy::too_many_arguments)]
     unsafe fn flat_quad(
         &mut self,
@@ -545,7 +570,6 @@ impl Renderer {
         abgr: u32,
         eye: Vec3,
         pull: f32,
-        ghost: bool,
     ) {
         self.quad.clear();
         // bl, br, tr, tl -> two triangles (0,1,2)(0,2,3).
@@ -561,12 +585,78 @@ impl Renderer {
         let Some(staged) = stage(&self.quad) else {
             return;
         };
-        gxm::set_depth(if ghost {
-            DepthMode::Occluded
-        } else {
-            DepthMode::TestOnly
-        });
+        gxm::set_depth(DepthMode::TestOnly);
         if pipeline.bind_flat(&vp.m, true) {
+            pipeline.draw(staged, self.sequential.as_ptr().cast(), 6);
+            self.draw_count += 1;
+        }
+    }
+
+    /// Draw the occluded player hint through a sprite-alpha-only atlas
+    /// variant. The stock Vita shaders cannot discard or replace sampled RGB,
+    /// so the cache expands the page into the flat ghost color ahead of time.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn ghost(
+        &mut self,
+        pipeline: &gxm::Pipeline,
+        pak: &Pak,
+        vp: &Mat4,
+        verts: [[f32; 3]; 4],
+        page: u16,
+        uv: [f32; 4],
+        mirror: bool,
+        pull: f32,
+        abgr: u32,
+        eye: Vec3,
+    ) {
+        if !self.bind(pak, page, 0, false, COLOR_PAL_NONE, Some(abgr)) {
+            return;
+        }
+        self.card_quad(
+            pipeline,
+            vp,
+            verts,
+            uv,
+            mirror,
+            pull,
+            eye,
+            DepthMode::Occluded,
+        );
+    }
+
+    /// Stage and draw the shared billboard quad after its caller has bound
+    /// either the ordinary sprite texture or the flat-color ghost mask.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn card_quad(
+        &mut self,
+        pipeline: &gxm::Pipeline,
+        vp: &Mat4,
+        verts: [[f32; 3]; 4],
+        uv: [f32; 4],
+        mirror: bool,
+        pull: f32,
+        eye: Vec3,
+        depth: DepthMode,
+    ) {
+        let (u0, u1) = if mirror { (uv[2], uv[0]) } else { (uv[0], uv[2]) };
+        let (v0, v1) = (uv[1], uv[3]);
+        let uvs = [(u0, v1), (u1, v1), (u1, v0), (u0, v0)];
+        self.tex_quad.clear();
+        for ci in [0usize, 1, 2, 0, 2, 3] {
+            let p = pulled(eye, vec3(verts[ci][0], verts[ci][1], verts[ci][2]), pull);
+            self.tex_quad.push(TexVert {
+                u: uvs[ci].0,
+                v: uvs[ci].1,
+                x: p.x,
+                y: p.y,
+                z: p.z,
+            });
+        }
+        let Some(staged) = stage(&self.tex_quad) else {
+            return;
+        };
+        gxm::set_depth(depth);
+        if pipeline.bind_tex(&vp.m, TexMode::Alpha) {
             pipeline.draw(staged, self.sequential.as_ptr().cast(), 6);
             self.draw_count += 1;
         }
@@ -589,32 +679,19 @@ impl Renderer {
     ) {
         // A card carries no per-item palette: its OBJ/pic CLUT is a property
         // of the PAGE, which `bind` resolves through VCOL.
-        if !self.bind(pak, page, 0, true, COLOR_PAL_NONE) {
+        if !self.bind(pak, page, 0, true, COLOR_PAL_NONE, None) {
             return;
         }
-        let (u0, u1) = if mirror { (uv[2], uv[0]) } else { (uv[0], uv[2]) };
-        let (v0, v1) = (uv[1], uv[3]);
-        // Verts arrive bl, br, tr, tl; v0 is the texture top (raster.rs).
-        let uvs = [(u0, v1), (u1, v1), (u1, v0), (u0, v0)];
-        self.tex_quad.clear();
-        for ci in [0usize, 1, 2, 0, 2, 3] {
-            let p = pulled(eye, vec3(verts[ci][0], verts[ci][1], verts[ci][2]), pull);
-            self.tex_quad.push(TexVert {
-                u: uvs[ci].0,
-                v: uvs[ci].1,
-                x: p.x,
-                y: p.y,
-                z: p.z,
-            });
-        }
-        let Some(staged) = stage(&self.tex_quad) else {
-            return;
-        };
-        gxm::set_depth(DepthMode::TestOnly);
-        if pipeline.bind_tex(&vp.m, TexMode::Alpha) {
-            pipeline.draw(staged, self.sequential.as_ptr().cast(), 6);
-            self.draw_count += 1;
-        }
+        self.card_quad(
+            pipeline,
+            vp,
+            verts,
+            uv,
+            mirror,
+            pull,
+            eye,
+            DepthMode::TestOnly,
+        );
     }
 
     /// The whole GB UI layer in one pass: screen space, no depth, UNTINTED
@@ -633,7 +710,7 @@ impl Renderer {
         else {
             return;
         };
-        if !self.bind(pak, page, 0, false, COLOR_PAL_NONE) {
+        if !self.bind(pak, page, 0, false, COLOR_PAL_NONE, None) {
             return;
         }
         let cols = ((p.w as i32 / TILE_PX) as u16).max(1);

@@ -508,6 +508,7 @@ export function buildCylinders(
   map: GameMap,
   art: Art,
   groundTiles: number[],
+  treeBoxes = false,
 ): void {
   // The quality ladder's PREDECESSOR, superseded by the `treeHullDist` dial
   // (contracts/spec/voxel-spec.ts §quality ladder): VOXEL_TREE_BOXES=1 skips
@@ -517,7 +518,7 @@ export function buildCylinders(
   // global switch could never do. Kept because it is still the cheapest way
   // to price the boxes-everywhere floor; a pak cooked with it carries neither
   // tree mesh kind and declares no VXPK_META_FLAG_TREE_LOD.
-  if (process.env.VOXEL_TREE_BOXES === "1") return;
+  if (treeBoxes) return;
   const tw = map.def.width * 4;
   const th = map.def.height * 4;
   const gsig = [...groundTiles].sort((a, b) => a - b).join(",");

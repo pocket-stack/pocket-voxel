@@ -97,7 +97,7 @@ const WORLD_VTYPE: VertexType = VertexType::from_bits_truncate(
         | VertexType::TRANSFORM_3D.bits(),
 );
 
-/// CPU-built untextured f32 vertex (shadow decals, the ghost).
+/// CPU-built untextured f32 vertex for shadow decals.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct FlatVert {
@@ -401,10 +401,26 @@ impl Renderer {
                     self.mesh(pak, mesh, list.cam.eye, &list.cam.vp);
                 }
                 Item::ShadowDecal { corners, abgr } => {
-                    self.flat_quad(*corners, *abgr, list.cam.eye, 0.0, false);
+                    self.flat_quad(*corners, *abgr, list.cam.eye, 0.0);
                 }
-                Item::Ghost { verts, pull, abgr } => {
-                    self.flat_quad(*verts, *abgr, list.cam.eye, *pull, true);
+                Item::Ghost {
+                    verts,
+                    page,
+                    uv,
+                    mirror,
+                    pull,
+                    abgr,
+                } => {
+                    self.ghost(
+                        pak,
+                        *verts,
+                        *page,
+                        *uv,
+                        *mirror,
+                        *pull,
+                        *abgr,
+                        list.cam.eye,
+                    );
                 }
                 Item::Card {
                     verts,
@@ -525,6 +541,46 @@ impl Renderer {
         sys::sceGuTexScale(w as f32 / pw as f32, h as f32 / ph as f32);
         sys::sceGuTexOffset(0.0, 0.0);
         self.bound = Some((page_idx, frame, tinted, index));
+    }
+
+    /// Bind a sprite page through a one-draw CLUT that keeps only the source
+    /// alpha mask and replaces every visible texel with `abgr`. The player
+    /// ghost must be a silhouette, not the sprite card's transparent box.
+    unsafe fn bind_ghost(&mut self, pak: &Pak, page_idx: u16, abgr: u32) -> bool {
+        let Some(page) = pak.atlases.get(page_idx as usize) else {
+            return false;
+        };
+        let pal_index = resolve_pal(pak, page_idx, page.kind, COLOR_PAL_NONE, self.palette);
+        let Some(source) = pak.palettes.get(pal_index) else {
+            return false;
+        };
+        let mut clut = [0u32; 256];
+        for (out, &color) in clut.iter_mut().zip(source.iter()) {
+            if (color >> 24) & 0xff >= 0x80 {
+                *out = abgr;
+            }
+        }
+        let clut = self.pool.upload(as_bytes(&clut));
+        sys::sceGuClutMode(ClutPixelFormat::Psm8888, 0, 0xff, 0);
+        sys::sceGuClutLoad(32, clut as *const c_void);
+
+        let (w, h) = (page.w as i32, page.h as i32);
+        let (pw, ph) = (po2(w), po2(h));
+        sys::sceGuTexMode(TexturePixelFormat::PsmT8, 0, 0, 1);
+        sys::sceGuTexImage(
+            MipmapLevel::None,
+            pw,
+            ph,
+            swizzle_stride(w as usize) as i32,
+            page.frame(0).as_ptr() as *const c_void,
+        );
+        sys::sceGuTexFlush();
+        sys::sceGuTexScale(w as f32 / pw as f32, h as f32 / ph as f32);
+        sys::sceGuTexOffset(0.0, 0.0);
+        // This custom CLUT is deliberately outside the ordinary bind cache;
+        // force the immediately following solid player card to restore it.
+        self.bound = None;
+        true
     }
 
     // -- item passes --------------------------------------------------------
@@ -699,22 +755,18 @@ impl Renderer {
         }
     }
 
-    /// Flat-color blended quad: shadow decals (normal depth test, no write)
-    /// and the player ghost (`ghost = true`: inverted test — Less in the
-    /// inverted range = draws only where occluded — no write, pulled).
+    /// Flat-color blended quad for a shadow decal (normal depth test, no
+    /// write). The player ghost is textured separately so its transparent
+    /// card pixels cannot become a visible rectangle.
     unsafe fn flat_quad(
         &mut self,
         corners: [[f32; 3]; 4],
         abgr: u32,
         eye: Vec3,
         pull: f32,
-        ghost: bool,
     ) {
         sys::sceGuEnable(GuState::DepthTest);
         sys::sceGuDepthMask(1); // no depth writes
-        if ghost {
-            sys::sceGuDepthFunc(DepthFunc::Less);
-        }
         sys::sceGuEnable(GuState::Blend);
         sys::sceGuDisable(GuState::Texture2D);
         sys::sceGuDisable(GuState::AlphaTest);
@@ -747,15 +799,13 @@ impl Renderer {
 
         sys::sceGuDepthMask(0);
         sys::sceGuDisable(GuState::Blend);
-        if ghost {
-            sys::sceGuDepthFunc(DepthFunc::GreaterOrEqual);
-        }
     }
 
-    /// A billboard card: textured, alpha-tested (Greater 0x7f — sprite
-    /// cutouts via `sceGuAlphaFunc`, docs/VOXEL.md §6), depth-written,
-    /// pulled along each vertex's eye ray.
-    unsafe fn card(
+    /// The occluded player hint: the current sprite's alpha-tested outline
+    /// in one flat translucent color, drawn only where terrain already won
+    /// depth. It writes no depth, matching the reference ghost pass.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn ghost(
         &mut self,
         pak: &Pak,
         verts: [[f32; 3]; 4],
@@ -763,29 +813,39 @@ impl Renderer {
         uv: [f32; 4],
         mirror: bool,
         pull: f32,
+        abgr: u32,
         eye: Vec3,
     ) {
-        if pak.atlases.get(page as usize).is_none() {
+        if !self.bind_ghost(pak, page, abgr) {
             return;
         }
         sys::sceGuEnable(GuState::DepthTest);
-        sys::sceGuDepthMask(0);
+        sys::sceGuDepthMask(1); // no depth writes
+        sys::sceGuDepthFunc(DepthFunc::Less); // inverted GE range: occluded only
         sys::sceGuEnable(GuState::Texture2D);
         sys::sceGuEnable(GuState::AlphaTest);
-        sys::sceGuDisable(GuState::Blend);
-        // A card carries no per-item palette: its OBJ/pic CLUT is a
-        // property of the PAGE, which `bind` resolves through VCOL.
-        self.bind(pak, page, 0, true, COLOR_PAL_NONE);
+        sys::sceGuEnable(GuState::Blend);
 
+        self.card_quad(verts, uv, mirror, pull, eye);
+
+        sys::sceGuDepthFunc(DepthFunc::GreaterOrEqual);
+        sys::sceGuDepthMask(0);
+        sys::sceGuDisable(GuState::Blend);
+    }
+
+    /// Upload and draw the shared four-vertex billboard geometry. Render
+    /// state and texture binding belong to `card` / `ghost` respectively.
+    unsafe fn card_quad(
+        &mut self,
+        verts: [[f32; 3]; 4],
+        uv: [f32; 4],
+        mirror: bool,
+        pull: f32,
+        eye: Vec3,
+    ) {
         let (u0, u1) = if mirror { (uv[2], uv[0]) } else { (uv[0], uv[2]) };
         let (v0, v1) = (uv[1], uv[3]);
-        // Verts arrive bl, br, tr, tl; v0 is the texture top (raster.rs).
         let uvs = [(u0, v1), (u1, v1), (u1, v0), (u0, v0)];
-        // Two real-GE gotchas bisected on device + PPSSPPHeadless (see the
-        // crate docs): textured 3D vertices must be the i16+indexed
-        // WORLD_VTYPE (textured VERTEX_32BITF draws sample garbage), and
-        // atlas pages must be >= 64 px wide (the cooker pads sprite sheets;
-        // 16-px-wide pages missample into vertical-strip noise).
         let mut out = [PakVert {
             u: 0,
             v: 0,
@@ -820,6 +880,39 @@ impl Renderer {
             data as *const c_void,
         );
         sys::sceGuSetMatrix(sys::MatrixMode::Model, &to_psp_matrix(&Mat4::IDENTITY));
+    }
+
+    /// A billboard card: textured, alpha-tested (Greater 0x7f — sprite
+    /// cutouts via `sceGuAlphaFunc`, docs/VOXEL.md §6), depth-written,
+    /// pulled along each vertex's eye ray.
+    unsafe fn card(
+        &mut self,
+        pak: &Pak,
+        verts: [[f32; 3]; 4],
+        page: u16,
+        uv: [f32; 4],
+        mirror: bool,
+        pull: f32,
+        eye: Vec3,
+    ) {
+        if pak.atlases.get(page as usize).is_none() {
+            return;
+        }
+        sys::sceGuEnable(GuState::DepthTest);
+        sys::sceGuDepthMask(0);
+        sys::sceGuEnable(GuState::Texture2D);
+        sys::sceGuEnable(GuState::AlphaTest);
+        sys::sceGuDisable(GuState::Blend);
+        // A card carries no per-item palette: its OBJ/pic CLUT is a
+        // property of the PAGE, which `bind` resolves through VCOL.
+        self.bind(pak, page, 0, true, COLOR_PAL_NONE);
+
+        // Two real-GE gotchas bisected on device + PPSSPPHeadless (see the
+        // crate docs): textured 3D vertices must be the i16+indexed
+        // WORLD_VTYPE (textured VERTEX_32BITF draws sample garbage), and
+        // atlas pages must be >= 64 px wide (the cooker pads sprite sheets;
+        // 16-px-wide pages missample into vertical-strip noise).
+        self.card_quad(verts, uv, mirror, pull, eye);
     }
 
     /// One GB UI tile: screen-space sprite, no depth, UNTINTED palette

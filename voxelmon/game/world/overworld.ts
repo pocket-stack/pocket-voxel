@@ -30,6 +30,10 @@ import {
   type WarpCarpets,
 } from "./warp.ts";
 import type { MapWarp } from "../data.ts";
+import {
+  placeDirectNeighbour,
+  type ConnectionDirection,
+} from "../../shared/connections.ts";
 
 // OverworldController.lua:37
 const COMPASS: Record<Dir, "north" | "south" | "east" | "west"> = {
@@ -117,23 +121,14 @@ export function computeNeighbors(
       const destDef = maps[conn.map];
       if (!destDef || placed.has(conn.map)) continue;
       placed.add(conn.map);
-      let ox: number;
-      let oy: number;
-      if (dir === "north") {
-        ox = conn.offset * 32;
-        oy = -destDef.height * 32;
-      } else if (dir === "south") {
-        ox = conn.offset * 32;
-        oy = cur.def.height * 32;
-      } else if (dir === "west") {
-        ox = -destDef.width * 32;
-        oy = conn.offset * 32;
-      } else {
-        ox = cur.def.width * 32;
-        oy = conn.offset * 32;
-      }
-      ox += cur.ox;
-      oy += cur.oy;
+      const direct = placeDirectNeighbour(
+        dir as ConnectionDirection,
+        conn,
+        cur.def,
+        destDef,
+      );
+      const ox = direct.ox + cur.ox;
+      const oy = direct.oy + cur.oy;
       if (cur.hops + 1 <= hops) {
         out.push({ id: conn.map, ox, oy });
         if (cur.hops + 1 < hops) {

@@ -9,8 +9,7 @@ import { join, resolve } from "node:path";
 
 export const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
-/** SHA-1 of the canonical US Red ROM (docs/VOXEL.md §1 — gate before decode). */
-export const RED_SHA1 = "ea9bcae617fdf159b045185467ae58b2e4a48b9a";
+export { RED_SHA1 } from "./constants.ts";
 
 // SCHEMA.md: no default ROM path is committed to docs; this is the local
 // developer default for this machine.

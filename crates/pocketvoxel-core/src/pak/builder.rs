@@ -18,6 +18,8 @@ use crate::spec::{
 pub struct ChunkDef {
     /// Baked-ground atlas page, or `spec::BAKE_PAGE_NONE`.
     pub bake_page: u16,
+    /// `spec::VXPK_CHUNK_FLAG_*` bits.
+    pub flags: u16,
     pub cx: i16,
     pub cy: i16,
     pub aabb_min: [i16; 3],
@@ -326,7 +328,12 @@ impl PakBuilder {
                     chnk.extend_from_slice(&v.to_le_bytes());
                 }
                 chnk.extend_from_slice(&c.bake_page.to_le_bytes());
-                chnk.extend_from_slice(&0u16.to_le_bytes());
+                assert_eq!(
+                    c.flags & !spec::VXPK_CHUNK_FLAG_BORDER_RING,
+                    0,
+                    "unknown chunk flags"
+                );
+                chnk.extend_from_slice(&c.flags.to_le_bytes());
                 for r in &c.meshes {
                     write_range(&mut chnk, r);
                 }

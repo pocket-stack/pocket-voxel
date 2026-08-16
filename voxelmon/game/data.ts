@@ -191,6 +191,9 @@ export interface MapDef {
   warps: MapWarp[];
   objects: MapObject[];
   signs: MapSign[];
+  /** Explicit Map.isOutdoor classification; legacy data falls back to the
+   * OVERWORLD tileset convention. */
+  outdoor?: boolean;
   source?: string;
 }
 
@@ -207,6 +210,8 @@ export interface TilesetDef {
   imageWidth?: number;
   imageHeight?: number;
   tilesPerRow?: number;
+  /** Cooked tile-id -> positive entity support height; absent in raw gen/. */
+  groundHeights?: number[];
   source?: string;
 }
 

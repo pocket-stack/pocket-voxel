@@ -18,10 +18,12 @@ import {
   QUALITY_UNBOUNDED,
   VOX_OP,
   VXPK_CHUNK_RECORD_SIZE,
+  VXPK_CHUNK_FLAG_BORDER_RING,
   VXPK_META_FLAG_TREE_COARSE,
   VXPK_META_FLAG_TREE_LOD,
   VXPK_META_SIZE,
   VXPK_TAG,
+  VXPK_VERSION,
 } from "../contracts/spec/voxel-spec.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { REMOTE_VIDEO_PLANE } from "../voxelmon/game/ui/remote-desktop.ts";
@@ -58,6 +60,11 @@ test("RecorderHost preserves every uiLabel numeric arg before its JSON string", 
     `s ${VOX_OP.uiLabel} 5 6 2 ${0xffaabbcc | 0} "PC: A/B"`,
   );
   expect(host.text()).toContain(`o ${VOX_OP.remotePlane} 7 8 320 180`);
+});
+
+test("new surface ops append without renumbering the existing contract", () => {
+  expect(VOX_OP.arenaEnd).toBe(74);
+  expect(VOX_OP.sky).toBe(75);
 });
 
 // The quality ladder's structural rules. Every one of these is a claim the
@@ -162,6 +169,13 @@ test("the pak declares the levels of detail it carries", () => {
   expect(MESH_KINDS).toBe(Object.keys(MESH_KIND).length);
   // 20 = coords + AABB + the bake page word and its pad (v6).
   expect(VXPK_CHUNK_RECORD_SIZE).toBe(20 + MESH_KINDS * 12);
+});
+
+test("VXPK v9 assigns the former chunk pad to border-ring flags", () => {
+  expect(VXPK_VERSION).toBe(9);
+  expect(VXPK_CHUNK_FLAG_BORDER_RING).toBe(1);
+  expect(VXPK_CHUNK_FLAG_BORDER_RING & (VXPK_CHUNK_FLAG_BORDER_RING - 1)).toBe(0);
+  expect(VXPK_CHUNK_RECORD_SIZE).toBe(128);
 });
 
 // Mesh kinds ARE the draw order (voxel-spec.ts §MESH_KIND), and the two tree

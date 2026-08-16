@@ -1,0 +1,17 @@
+[package]
+name = "pocketvoxel-wasm"
+description = "Pocket Voxel core and deterministic renderer for browser WebAssembly hosts"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pocketvoxel-core = { path = "../pocketvoxel-core" }
+pocketvoxel-sim = { path = "../pocketvoxel-sim" }
+self_cell = "1.2"
+# Keep the Rust crate on the schema emitted by the repository's installed
+# wasm-bindgen CLI; the build helper verifies this before generating glue.
+wasm-bindgen = "=0.2.126"

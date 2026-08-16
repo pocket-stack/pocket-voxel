@@ -93,6 +93,7 @@ import {
   VOX_OP,
   VXPK_ALIGN,
   VXPK_AUDIO_HEADER_SIZE,
+  VXPK_CHUNK_FLAG_BORDER_RING,
   VXPK_CHUNK_RECORD_SIZE,
   VXPK_COLOR_FLAG_WORLD,
   VXPK_COLOR_HEADER_SIZE,
@@ -446,6 +447,8 @@ export function generateVoxelRust(): string {
   put(`pub const VXPK_META_FLAG_TREE_COARSE: u32 = ${VXPK_META_FLAG_TREE_COARSE};`);
   put("/// META flag bit 2: eligible chunks carry a baked ground quad + page.");
   put(`pub const VXPK_META_FLAG_GROUND_BAKE: u32 = ${VXPK_META_FLAG_GROUND_BAKE};`);
+  put("/// CHNK flag bit 0: border-ring geometry, drawn for map slot 0 only.");
+  put(`pub const VXPK_CHUNK_FLAG_BORDER_RING: u16 = ${VXPK_CHUNK_FLAG_BORDER_RING};`);
   put('/// `Chunk.bake_page` value for "no baked ground".');
   put(`pub const BAKE_PAGE_NONE: u16 = ${hex(BAKE_PAGE_NONE, 4)};`);
   put("/// The AUDI payload's own header (json_len, program_len, two pad words).");

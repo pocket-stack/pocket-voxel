@@ -10,6 +10,6 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["contracts", "host", "tools", "tests", "voxelmon"],
+  "include": ["contracts", "host", "tools", "tests", "voxelmon", "web"],
   "exclude": ["vendor", "node_modules", "dist"]
 }

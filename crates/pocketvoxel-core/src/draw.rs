@@ -204,10 +204,15 @@ pub enum Item {
     /// Flat-color blended quad on the ground under an entity/card.
     /// Depth-tested, never depth-written. Corners: bl, br, tr, tl.
     ShadowDecal { corners: [[f32; 3]; 4], abgr: u32 },
-    /// The player silhouette: the card again, flat color, inverted depth
-    /// test (draws only where occluded), no depth write.
+    /// The player silhouette: the same sprite-masked card in a flat color,
+    /// with inverted depth test (draws only where occluded) and no depth
+    /// write. The texture coordinates are load-bearing: drawing this as an
+    /// untextured quad exposes the transparent 16x16 card as a grey box.
     Ghost {
         verts: [[f32; 3]; 4],
+        page: u16,
+        uv: [f32; 4],
+        mirror: bool,
         pull: f32,
         abgr: u32,
     },
@@ -354,13 +359,23 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
     let mut items = Vec::new();
 
     // 1. Sky.
-    let mut colors = SKY_ABGR;
-    for c in &mut colors {
-        *c = modulate_rgb(*c, scene.tint);
+    let mut colors = if scene.sky_visible {
+        SKY_ABGR
+    } else {
+        [0xff00_0000; SKY_BANDS]
+    };
+    if scene.sky_visible {
+        for c in &mut colors {
+            *c = modulate_rgb(*c, scene.tint);
+        }
     }
     items.push(Item::SkyBands {
         colors,
-        horizon_row: horizon_row(&cam, VIEW_H),
+        horizon_row: if scene.sky_visible {
+            horizon_row(&cam, VIEW_H)
+        } else {
+            0
+        },
     });
 
     // Visible chunks, gathered once and replayed per mesh-kind pass.
@@ -390,6 +405,9 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             }
             slot_pal[slot] = pak.map_world_pal(ms.map_id).unwrap_or(COLOR_PAL_NONE);
             for chunk in pak.chunks_of(dir) {
+                if slot != 0 && chunk.flags & spec::VXPK_CHUNK_FLAG_BORDER_RING != 0 {
+                    continue;
+                }
                 let mins = vec3(
                     (chunk.aabb_min[0] as i32 + ms.ox) as f32,
                     chunk.aabb_min[1] as f32,
@@ -454,9 +472,8 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
     // where the bake is exact: field play at the rung-2 REST pitch, the
     // projection it was cooked at. A battle rig, another pitch rung or a
     // live tween falls back to full geometry: slower, never wrong.
-    let bake_ok = !scene.battle.active
-        && scene.pitch_rung == 2
-        && scene.pitch_t >= spec::PITCH_TWEEN_TICKS;
+    let bake_ok =
+        !scene.battle.active && scene.pitch_rung == 2 && scene.pitch_t >= spec::PITCH_TWEEN_TICKS;
     let baked = |v: &Visible<'_>| -> bool {
         bake_ok
             && v.chunk.bake_page != spec::BAKE_PAGE_NONE
@@ -545,16 +562,17 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
                 }
                 let before = items.len();
                 push_mesh(items, v, kind, pull, bias);
-                if thin && items.len() > before {
-                    if let Some(Item::ChunkMesh { mesh, .. }) = items.last_mut() {
-                        let quads = mesh.index_count as u32 / 6;
-                        let keep = quads.div_ceil(density);
-                        mesh.index_count = (keep * 6) as u16;
-                        // The prefix indices only reference the prefix
-                        // vertices (evens pack first), so the geometric
-                        // restage path shrinks with it.
-                        mesh.vert_count = (keep * 4) as u16;
-                    }
+                if thin
+                    && items.len() > before
+                    && let Some(Item::ChunkMesh { mesh, .. }) = items.last_mut()
+                {
+                    let quads = mesh.index_count as u32 / 6;
+                    let keep = quads.div_ceil(density);
+                    mesh.index_count = (keep * 6) as u16;
+                    // The prefix indices only reference the prefix
+                    // vertices (evens pack first), so the geometric
+                    // restage path shrinks with it.
+                    mesh.vert_count = (keep * 4) as u16;
                 }
             }
         };
@@ -691,9 +709,14 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
         [0.0, row * vh, u1, (row + 1.0) * vh]
     };
     for ent in scene.ents.iter().filter(|e| e.shown) {
-        if ent.flags & ent_flag::GHOST != 0 {
+        if ent.flags & ent_flag::GHOST != 0
+            && let Some(page) = page_at(pak, ent.sheet)
+        {
             items.push(Item::Ghost {
                 verts: card_verts(ent_feet(ent), card_w, card_w, a),
+                page: ent.sheet as u16,
+                uv: sheet_uv(page, ent.frame),
+                mirror: ent.flags & ent_flag::MIRROR != 0,
                 pull: pull_card,
                 abgr: GHOST_ABGR,
             });
@@ -868,7 +891,15 @@ mod tests {
         let mut s = shown_scene();
         s.op(
             op::ENT,
-            &[0, 1, 0, 64 * Q4, 64 * Q4, 0, ent_flag::GHOST as i32],
+            &[
+                0,
+                1,
+                1,
+                64 * Q4,
+                64 * Q4,
+                0,
+                (ent_flag::GHOST | ent_flag::MIRROR) as i32,
+            ],
             None,
         );
         s.op(op::UI_TILE, &[2, 3, 5], None);
@@ -905,10 +936,64 @@ mod tests {
             .unwrap();
         assert!(ui_at < video_at, "video follows the whole GB UI pass");
         assert!(video_at < overlay_at, "overlay frames the video plane");
-        assert!(list.items.iter().any(|i| matches!(i, Item::Ghost { .. })));
+        let ghost = list
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Ghost {
+                    verts,
+                    page,
+                    uv,
+                    mirror,
+                    pull,
+                    abgr,
+                } => Some((*verts, *page, *uv, *mirror, *pull, *abgr)),
+                _ => None,
+            })
+            .expect("ghost entity emits an occluded silhouette");
+        let card = list
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Card {
+                    verts,
+                    page,
+                    uv,
+                    mirror,
+                    pull,
+                } => Some((*verts, *page, *uv, *mirror, *pull)),
+                _ => None,
+            })
+            .expect("ghost entity still emits its ordinary card");
+        assert_eq!(ghost.0, card.0, "ghost reuses the card geometry");
+        assert_eq!(
+            (ghost.1, ghost.2, ghost.3, ghost.4),
+            (card.1, card.2, card.3, card.4),
+            "ghost reuses the card's exact sprite mask and pull",
+        );
+        assert_eq!((ghost.1, ghost.2, ghost.3), (1, [0.0, 0.5, 1.0, 1.0], true));
+        assert_eq!(ghost.5, GHOST_ABGR);
         // Deterministic: the same scene builds the same list.
         let again = build(&s, &pak);
         assert_eq!(list.items, again.items);
+    }
+
+    #[test]
+    fn hidden_sky_keeps_the_mandatory_opaque_black_clear() {
+        let blob = pak::AlignedBlob::from_bytes(&pak::tests::tiny_pak_bytes());
+        let pak = pak::read(blob.bytes()).unwrap();
+        let mut s = shown_scene();
+        s.op(op::SKY, &[0], None);
+        let list = build(&s, &pak);
+        let Item::SkyBands {
+            colors,
+            horizon_row,
+        } = list.items[0]
+        else {
+            panic!("the clear remains the first draw-list item");
+        };
+        assert_eq!(colors, [0xff00_0000; SKY_BANDS]);
+        assert_eq!(horizon_row, 0);
     }
 
     #[test]
@@ -987,9 +1072,9 @@ mod tests {
     /// (the orbit camera stands to the south and looks -Z, so that is the
     /// direction distance is visible in), each carrying terrain + both tree
     /// levels + grass + flower. The far chunk is inside the chunk cap
-    /// (384 px < 340 + 64) and outside every detail dial, so it is exactly
-    /// the chunk a fade is supposed to strip and the cap is not.
-    fn fading_pak_bytes(tree_lod: bool) -> alloc::vec::Vec<u8> {
+    /// (384 px < 340 + 64), so it proves the current PSP rung applies one
+    /// uniform representation throughout the visible field.
+    fn quality_pak_bytes(tree_lod: bool) -> alloc::vec::Vec<u8> {
         use crate::pak::builder::{ChunkDef, PakBuilder};
         use crate::pak::{MeshRange, PakVert};
         let mut b = PakBuilder::new();
@@ -1016,12 +1101,13 @@ mod tests {
                 &[0, 1, 2, 0, 2, 3],
             )
         };
-        let chunk = |cy: i16, m: [MeshRange; spec::MESH_KINDS]| ChunkDef {
+        let chunk = |cy: i16, flags: u16, m: [MeshRange; spec::MESH_KINDS]| ChunkDef {
             cx: 0,
             cy,
             aabb_min: [0, 0, cy * 128],
             aabb_max: [128, 0, cy * 128 + 128],
             bake_page: spec::BAKE_PAGE_NONE,
+            flags,
             meshes: m,
         };
         let empty = MeshRange::default();
@@ -1040,15 +1126,22 @@ mod tests {
             quad(0, 0, 64, 64),
             quad(64, 64, 128, 128),
         ];
-        // One chunk north (128 px): outside the psp rung's fine reach
-        // (0 + half), inside its coarse reach (128 + half) — the middle ring.
+        // One chunk north (128 px): still inside the same uniform PSP rung.
         let mid = [
             quad(0, -128, 128, 0),
             empty,
             empty,
             quad(8, -120, 24, -104),
-            if tree_lod { quad(8, -120, 24, -104) } else { empty },
-            if tree_lod { quad(8, -120, 24, -104) } else { empty },
+            if tree_lod {
+                quad(8, -120, 24, -104)
+            } else {
+                empty
+            },
+            if tree_lod {
+                quad(8, -120, 24, -104)
+            } else {
+                empty
+            },
             empty,
             quad(0, -128, 64, -64),
             quad(64, -64, 128, 0),
@@ -1058,13 +1151,28 @@ mod tests {
             empty,
             empty,
             quad(8, -376, 24, -360),
-            if tree_lod { quad(8, -376, 24, -360) } else { empty },
-            if tree_lod { quad(8, -376, 24, -360) } else { empty },
-            empty,
+            if tree_lod {
+                quad(8, -376, 24, -360)
+            } else {
+                empty
+            },
+            if tree_lod {
+                quad(8, -376, 24, -360)
+            } else {
+                empty
+            },
+            quad(32, -384, 96, -320),
             quad(0, -384, 64, -320),
             quad(64, -320, 128, -256),
         ];
-        b.map(7, &[chunk(-3, far), chunk(-1, mid), chunk(0, near)]);
+        b.map(
+            7,
+            &[
+                chunk(-3, spec::VXPK_CHUNK_FLAG_BORDER_RING, far),
+                chunk(-1, 0, mid),
+                chunk(0, 0, near),
+            ],
+        );
         b.stamps(7, &[]);
         b.game(b"{}");
         if tree_lod {
@@ -1073,12 +1181,52 @@ mod tests {
         b.finish()
     }
 
-    /// The rung's grass/flower dials strip the far chunk's DETAIL meshes and
-    /// nothing else: the same chunk's terrain still draws, because terrain is
-    /// the silhouette and only the chunk cap bounds it.
     #[test]
-    fn detail_meshes_fade_with_the_rung() {
-        let blob = pak::AlignedBlob::from_bytes(&fading_pak_bytes(true));
+    fn border_ring_chunks_draw_only_for_the_current_map_slot() {
+        let blob = pak::AlignedBlob::from_bytes(&quality_pak_bytes(true));
+        let pak = pak::read(blob.bytes()).unwrap();
+        let ring = pak
+            .chunks
+            .iter()
+            .find(|chunk| chunk.flags & spec::VXPK_CHUNK_FLAG_BORDER_RING != 0)
+            .expect("fixture carries a border ring");
+        let ring_ranges: alloc::vec::Vec<u32> = ring
+            .meshes
+            .iter()
+            .filter(|mesh| mesh.index_count > 0)
+            .map(|mesh| mesh.vert_base)
+            .collect();
+
+        let render = |slot: i32| {
+            let mut scene = Scene::new();
+            scene.op(op::QUALITY, &[spec::quality_tier::DESKTOP as i32], None);
+            scene.op(op::MAP_SHOW, &[slot, 7, 0, 0], None);
+            scene.op(op::CAM, &[64 * Q4, 64 * Q4], None);
+            scene.op(op::PITCH, &[4], None);
+            for _ in 0..spec::PITCH_TWEEN_TICKS {
+                scene.tick();
+            }
+            build(&scene, &pak)
+        };
+        let body_has_ring = |list: &DrawList| {
+            list.items.iter().any(|item| match item {
+                Item::ChunkMesh { mesh, .. } => ring_ranges.contains(&mesh.vert_base),
+                _ => false,
+            })
+        };
+
+        assert!(body_has_ring(&render(0)), "slot 0 keeps its protective ring");
+        assert!(
+            !body_has_ring(&render(1)),
+            "neighbour slots omit every mesh pass carried by a ring record"
+        );
+    }
+
+    /// The current PSP rung has no moving representation boundary: it keeps
+    /// grass/flowers and the coarse tree carve everywhere inside the chunk cap.
+    #[test]
+    fn detail_meshes_are_uniform_on_the_psp_rung() {
+        let blob = pak::AlignedBlob::from_bytes(&quality_pak_bytes(true));
         let pak = pak::read(blob.bytes()).unwrap();
         let kinds = |tier: u8| -> alloc::vec::Vec<(u16, u32)> {
             let mut s = Scene::new();
@@ -1102,7 +1250,11 @@ mod tests {
         let count = |v: &[(u16, u32)], kind: u16| v.iter().filter(|(k, _)| *k == kind).count();
 
         let top = kinds(spec::quality_tier::DESKTOP);
-        assert_eq!(count(&top, mesh_kind::TERRAIN), 3, "all three chunks in view");
+        assert_eq!(
+            count(&top, mesh_kind::TERRAIN),
+            3,
+            "all three chunks in view"
+        );
         assert_eq!(count(&top, mesh_kind::GRASS), 3, "top rung fades nothing");
         assert_eq!(count(&top, mesh_kind::FLOWER), 3);
 
@@ -1120,11 +1272,10 @@ mod tests {
             3,
             "a detail dial never touches terrain — the silhouette must not move"
         );
-        assert_eq!(count(&psp, mesh_kind::GRASS), 2, "the far grass faded");
-        assert_eq!(count(&psp, mesh_kind::FLOWER), 2);
-        // The psp rung's fine dial is OFF (`QUALITY_OFF`): every carved
-        // tree in reach — the chunk underfoot included — is the coarse one,
-        // and the far ring boxes. Swapped, never dropped.
+        assert_eq!(count(&psp, mesh_kind::GRASS), 3, "grass is uniform in view");
+        assert_eq!(count(&psp, mesh_kind::FLOWER), 3);
+        // The psp rung's fine dial is OFF (`QUALITY_OFF`): every carved tree
+        // in reach — the chunk underfoot included — is uniformly coarse.
         assert_eq!(
             count(&psp, mesh_kind::TREE_HULL),
             0,
@@ -1132,10 +1283,14 @@ mod tests {
         );
         assert_eq!(
             count(&psp, mesh_kind::TREE_COARSE),
-            2,
-            "underfoot and the middle ring both carve at 2x2"
+            3,
+            "every visible ring carves at 2x2"
         );
-        assert_eq!(count(&psp, mesh_kind::TREE_BOX), 1, "the far ring boxes");
+        assert_eq!(
+            count(&psp, mesh_kind::TREE_BOX),
+            0,
+            "no moving box boundary"
+        );
     }
 
     /// `QUALITY_OFF` means off: the half-extent widening lets even a 0 dial
@@ -1156,7 +1311,7 @@ mod tests {
     /// the carved hull a rung did not ask for is merely slow.
     #[test]
     fn a_pak_without_the_lod_flag_keeps_the_level_it_carries() {
-        let blob = pak::AlignedBlob::from_bytes(&fading_pak_bytes(false));
+        let blob = pak::AlignedBlob::from_bytes(&quality_pak_bytes(false));
         let pak = pak::read(blob.bytes()).unwrap();
         assert!(!pak.has_tree_lod());
         for tier in [spec::quality_tier::PSP, spec::quality_tier::DESKTOP] {
@@ -1197,7 +1352,10 @@ mod tests {
                 ("flower", dials.flower_dist),
                 // The tree that matters is CARVED at some level — fine or
                 // coarse — never the box slab; the reach is their union.
-                ("carve reach", dials.tree_hull_dist.max(dials.tree_coarse_dist)),
+                (
+                    "carve reach",
+                    dials.tree_hull_dist.max(dials.tree_coarse_dist),
+                ),
             ] {
                 assert!(
                     within_dist(worst_dist2, half, limit),

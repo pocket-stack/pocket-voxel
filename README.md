@@ -1,4 +1,4 @@
-# Pocket Voxel
+<h1><img src="./web/favicon.svg" width="40" height="40" alt="" align="absmiddle" /> Pocket Voxel</h1>
 
 <p align="center">
   <img src="docs/shots/psp-pallet-town.png" width="720" alt="Pallet Town as a voxel diorama on a real PSP — carved trees, gabled roofs, an NPC and the player between the houses." />
@@ -12,9 +12,9 @@
 <p align="center"><em>All three screenshots are captures from a real PSP-2000 over PSPLINK.
 The same build runs on a PS Vita at 960x544 — see <a href="#run-it">Run it</a>.</em></p>
 
-A Game Boy creature-RPG, presented as a voxelized 3D diorama on handheld
-hardware — **a real PSP and a real PS Vita, from one cooked pak and one
-guest bundle**. The gameplay is a TypeScript port of the
+A Game Boy creature-RPG, presented as a voxelized 3D diorama in the browser
+and on handheld hardware — **the Web Player, a real PSP and a real PS Vita,
+from one cooked pak and one guest bundle**. The gameplay is a TypeScript port of the
 [gen1recomp](https://github.com/bryanthaboi/gen1recomp) Lua engine running in
 an embedded QuickJS guest; the presentation is a Rust reimplementation of the
 [DramaticShape Voxel Mod](https://github.com/DramaticShape/DramaticShapeVoxelMod)
@@ -59,7 +59,7 @@ cook time (Bun, your machine)            run time (PSP / PS Vita)
 ```
 
 - **One pak, many machines.** Fidelity is a runtime *ladder*, not a build
-  flag: the same 31 MB pak serves the PSP rung (30 fps present lock, 60 Hz
+  flag: the same 29.7 MB pak serves the PSP rung (30 fps present lock, 60 Hz
   logic), the Vita rung, and the desktop identity rung — which replays the
   pre-ladder picture pixel-for-pixel and is pinned by committed frame hashes
   no dial edit may move. **The rung is named by the HOST, not the guest**, so
@@ -100,6 +100,37 @@ bun tools/voxel.ts check    # replay the tapes, assert both rungs' hashes
 ```
 
 ## Run it
+
+### Web
+
+The browser build contains the renderer and non-ROM reference metadata, but no
+game content. It verifies and bakes a ROM you select entirely in a local Web
+Worker, then offers three independent targets from the same cooked world:
+the in-page Web Player, a PSP memory-stick ZIP, or a PS Vita VPK. A second,
+lazy-loaded WASM packager validates the ROM-independent native templates and
+assembles either console download locally; it does not upload the ROM or run a
+cross-compiler in the tab.
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.126 --locked
+bun run web:build
+bun run web:serve            # http://127.0.0.1:8131/
+bun run web:smoke:packages   # verify PSP/Vita archives + embedded VXPK
+bun run web:deploy           # publish static assets to pocketvoxel.games
+# Optional real-Chrome acceptance with VOXELMON_ROM (or the local default):
+bun run web:e2e
+```
+
+Drop your canonical US Pokémon Red ROM onto the page. The player maps its
+480×272 framebuffer onto a demand-rendered 3D Game Boy; the model's D-pad,
+face buttons, Start, and Select are interactive alongside keyboard and standard
+gamepad input. The ROM and cooked pak remain in memory for this tab only; they
+are neither uploaded nor written to browser storage. The attributed stage model
+and its license ship under `web/assets/game-boy/`. PSP output is a ZIP whose
+`PSP/GAME/VOXELMON/` directory contains both the generated `EBOOT.PBP` and its
+required `voxelmon.vxpak`; Vita output is one self-contained `.vpk`. Both
+downloads carry the native runtime's third-party notices.
 
 ### PSP
 

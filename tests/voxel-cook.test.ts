@@ -29,9 +29,9 @@ import {
   genMissingReason,
   loadGen,
   loadRedpp,
-  PX_CLEAR,
-} from "../voxelmon/cook/data.ts";
-import { buildCharmap, buildMapPalette } from "../voxelmon/cook/gamedata.ts";
+} from "../voxelmon/cook/data-node.ts";
+import { PX_CLEAR, type GenData, type Profile } from "../voxelmon/cook/data.ts";
+import { buildCharmap, buildGamedata, buildMapPalette } from "../voxelmon/cook/gamedata.ts";
 import {
   cullHidden,
   DOWN_CULL_Y,
@@ -100,6 +100,82 @@ function readPak(path: string): { flags: number; chunks: ChunkRec[] } {
 
 const root = join(import.meta.dir, "..");
 const scratch = join(root, "dist/voxelmon");
+
+describe("GAME entity support heights", () => {
+  test("cooks a dense tile lookup only for tilesets carried by the pak", () => {
+    const tileset = (id: string) => ({
+      id,
+      image: `assets/generated/${id.toLowerCase()}.png`,
+      imageWidth: 32,
+      imageHeight: 8,
+      tilesPerRow: 4,
+      blocks: [new Array(16).fill(0)],
+      walkable: [3],
+      counterTiles: [],
+      doorTiles: [],
+      warpTiles: [],
+    });
+    const map = (id: string, tilesetId: string, index: number) => ({
+      id,
+      index,
+      tileset: tilesetId,
+      width: 1,
+      height: 1,
+      blocks: [0],
+      borderBlock: 0,
+      connections: {},
+      warps: [],
+      signs: [],
+      objects: [],
+    });
+    const gen = {
+      maps: {
+        COOKED: map("COOKED", "TEST_SUPPORT", 0),
+        UNCOOKED: map("UNCOOKED", "UNUSED_SUPPORT", 1),
+      },
+      tilesets: {
+        TEST_SUPPORT: tileset("TEST_SUPPORT"),
+        UNUSED_SUPPORT: tileset("UNUSED_SUPPORT"),
+      },
+      palettes: { palettes: {}, order: ["ROUTE"], pokemon: {} },
+      pokemon: {},
+      constants: {},
+      encounters: {},
+      moves: {},
+      items: {},
+      typeChart: {},
+      trainers: {},
+      text: {},
+      textPointers: {},
+      trainerHeaders: {},
+      field: {},
+    } as unknown as GenData;
+    const profile: Profile = {
+      tilesets: {
+        TEST_SUPPORT: {
+          table: [0],
+          stair_e: [1],
+          void: [2],
+        },
+      },
+    };
+    const atlas = {
+      sprites: {},
+      picFront: {},
+      picBack: {},
+      emotePage: null,
+      uiPage: 1,
+      terrainPage: 0,
+    };
+
+    const game = JSON.parse(
+      new TextDecoder().decode(buildGamedata(gen, atlas, ["COOKED"], profile)),
+    ) as { tilesets: Record<string, { groundHeights?: number[] }> };
+
+    expect(game.tilesets.TEST_SUPPORT.groundHeights).toEqual([12, 0, 0, 0]);
+    expect(game.tilesets.UNUSED_SUPPORT.groundHeights).toBeUndefined();
+  });
+});
 
 const reason = genMissingReason();
 if (reason) {
@@ -243,7 +319,7 @@ describe.skipIf(reason !== null)("voxel cook", () => {
     }
   });
 
-  test("the cull drops only -Y faces, and VOXEL_KEEP_HIDDEN puts them back", () => {
+  test("the cull drops only -Y faces, and keepHidden puts them back", () => {
     const quads: Quad[] = [
       { c: box(0, 40, 0), shade: 1, f: FACE.down }, // above the floor: kept
       { c: box(0, 8, 0), shade: 1, f: FACE.down }, // below it: dropped
@@ -251,6 +327,7 @@ describe.skipIf(reason !== null)("voxel cook", () => {
       { c: box(8, 8, 0), shade: 1, f: FACE.up },
     ];
     expect(cullHidden(quads).map((q) => q.f)).toEqual([FACE.down, FACE.north, FACE.up]);
+    expect(cullHidden(quads, false, true).length).toBe(quads.length);
     // Pulled streams (grass, flower) are exempt whatever they face.
     expect(cullHidden(quads, PULLED).length).toBe(quads.length);
   });

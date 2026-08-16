@@ -4,7 +4,7 @@
 
 import { check, hex2 } from "../ctx.ts";
 import type { Ctx, RomSymbol } from "../ctx.ts";
-import { numericKeyed } from "../writer.ts";
+import { numericKeyed } from "../normalization.ts";
 
 // gen1recomp RomExtractor.lua:1402 — glyph overrides applied before the
 // charmap; charmap glyphs shaped <X> rewrite to {X}.
