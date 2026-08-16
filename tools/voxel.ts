@@ -24,7 +24,7 @@ commands:
   parity    deep-compare gen/*.json against the gen1recomp reference
   cook      voxelize + pack dist/voxelmon/voxelmon.vxpak
   sim       run the story tape headless -> dist/voxelmon/trace/story.vtrace
-  check     import-if-missing + cook + both tapes + rasterize vs the hash
+  check     import-if-missing + cook + all tapes + rasterize vs the hash
             goldens at BOTH pinned quality rungs: the shipped psp rung
             (<tape>.hashes) and the top rung, which must still be the
             pre-ladder identity (<tape>-max.hashes)
@@ -46,12 +46,12 @@ env: VOXELMON_ROM (canonical US Red), VOXELMON_G1R (~/code/gen1recomp),
      VOXELMON_VOXELMOD (~/code/DramaticShapeVoxelMod), VITASDK`;
 
 const ROOT = new URL("..", import.meta.url).pathname;
-/** Both tapes' tested seed — their routes are plotted against it. */
+/** Every tape's tested seed — their routes are plotted against it. */
 const STORY_SEED = "17";
 const PAK = "dist/voxelmon/voxelmon.vxpak";
 
 /** The tapes every verdict runs. Each records its own trace and goldens. */
-const TAPES = ["story", "battle"] as const;
+const TAPES = ["story", "battle", "computer"] as const;
 const trace = (tape: string) => `dist/voxelmon/trace/${tape}.vtrace`;
 
 /**

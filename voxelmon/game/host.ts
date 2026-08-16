@@ -51,6 +51,21 @@ export interface VoxelHost {
   /** Glyphs of the last uiText shown. */
   uiReveal(n: number): void;
   uiClear(): void;
+  /** Append a solid rectangle in native screen pixels; color is ABGR. */
+  uiRect(x: number, y: number, w: number, h: number, abgr: number): void;
+  /** Append a transparent-background 5x7 bitmap label. */
+  uiLabel(x: number, y: number, scale: number, abgr: number, str: string): void;
+  uiOverlayClear(): void;
+  /** Position the one host-owned remote-video plane; non-positive size hides it. */
+  remotePlane(x: number, y: number, w: number, h: number): void;
+  /** Try to attach the host's remote desktop stream. Safe to retry. */
+  remoteOpen(): boolean;
+  /** Stream status: >= 0 is the latest committed frame; -1 means the stream
+   *  is open and awaiting its first frame; -2 means it disconnected or ended
+   *  and must be closed and reopened. */
+  remoteTick(): number;
+  /** Release the remote stream. Safe even when no open attempt succeeded. */
+  remoteClose(): void;
   // battle
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void;
   card(side: number, pic: number, x: number, y: number): void;
@@ -95,9 +110,21 @@ export class RecorderHost implements VoxelHost {
   opCount = 0;
   markCount = 0;
   readonly marks: string[] = [];
+  /** Bun/sim remote seam. `remoteAvailable` gates open; `remoteFrame` is >= 0
+   *  for a committed frame, -1 while awaiting one, or -2 after termination. */
+  remoteAvailable = false;
+  remoteFrame = -1;
+  remoteOpenCalls = 0;
+  remoteTickCalls = 0;
+  remoteCloseCalls = 0;
 
   private op(code: number, ...args: number[]): void {
     this.pending.push(`o ${code}${args.length ? " " : ""}${args.join(" ")}`);
+    this.opCount += 1;
+  }
+
+  private stringOp(code: number, args: number[], str: string): void {
+    this.pending.push(`s ${code} ${args.join(" ")} ${JSON.stringify(str)}`);
     this.opCount += 1;
   }
 
@@ -164,15 +191,37 @@ export class RecorderHost implements VoxelHost {
     this.op(VOX_OP.uiFill, x, y, w, h, tile);
   }
   uiText(x: number, y: number, str: string): void {
-    // the string-arg op form: `s <code> <i32> <i32> <json-string>`
-    this.pending.push(`s ${VOX_OP.uiText} ${x} ${y} ${JSON.stringify(str)}`);
-    this.opCount += 1;
+    this.stringOp(VOX_OP.uiText, [x, y], str);
   }
   uiReveal(n: number): void {
     this.op(VOX_OP.uiReveal, n);
   }
   uiClear(): void {
     this.op(VOX_OP.uiClear);
+  }
+  uiRect(x: number, y: number, w: number, h: number, abgr: number): void {
+    this.op(VOX_OP.uiRect, x, y, w, h, abgr | 0);
+  }
+  uiLabel(x: number, y: number, scale: number, abgr: number, str: string): void {
+    this.stringOp(VOX_OP.uiLabel, [x, y, scale, abgr | 0], str);
+  }
+  uiOverlayClear(): void {
+    this.op(VOX_OP.uiOverlayClear);
+  }
+  remotePlane(x: number, y: number, w: number, h: number): void {
+    this.op(VOX_OP.remotePlane, x, y, w, h);
+  }
+  remoteOpen(): boolean {
+    this.remoteOpenCalls += 1;
+    return this.remoteAvailable;
+  }
+  remoteTick(): number {
+    this.remoteTickCalls += 1;
+    return this.remoteFrame;
+  }
+  remoteClose(): void {
+    this.remoteCloseCalls += 1;
+    this.remoteFrame = -1;
   }
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void {
     this.op(VOX_OP.arena, mapId, x, y, shape, rig);

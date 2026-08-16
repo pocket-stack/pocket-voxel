@@ -10,6 +10,7 @@
     "shots": "bun tools/voxel.ts shots",
     "psp": "bun tools/voxel.ts psp --release",
     "vita": "bun tools/voxel.ts vita --release",
+    "desktop:serve": "bun host/desktop-stream/serve.ts",
     "web:refs": "bun web/scripts/build-reference.ts",
     "web:build": "bun web/scripts/build.ts",
     "web:serve": "bun web/scripts/serve.ts",

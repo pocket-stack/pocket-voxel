@@ -44,6 +44,8 @@ vitasdk-sys = { version = "0.3.3", features = [
     "SceSysmodule_stub",
 ] }
 libquickjs-sys = { git = "https://github.com/pocket-stack/quickjs-rs.git", rev = "ba5bdd0dc013518768e76cd9e05cd30ed53dd35b" }
+pocketjs-core = { path = "../../vendor/pocketjs/engine/core", features = ["std"] }
+pocketjs-vita = { path = "../../vendor/pocketjs/hosts/vita" }
 pocketvoxel-core = { path = "../pocketvoxel-core" }
 pocketvoxel-gxm = { path = "../pocketvoxel-gxm" }
 # vita2d owns process-level GXM: the context, the shader patcher, the render

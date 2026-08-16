@@ -126,10 +126,36 @@ impl PocketVoxel {
         true
     }
 
-    /// Apply the one string-bearing surface op (`uiText`). Unknown codes stay
-    /// defensive no-ops through `Scene::op`, just like native hosts.
+    /// Apply the common two-argument string-bearing surface op (`uiText`).
+    /// Unknown codes stay defensive no-ops through `Scene::op`, just like
+    /// native hosts.
     pub fn op_text(&mut self, code: u32, x: i32, y: i32, text: &str) {
         self.scene.op(code, &[x, y], Some(text));
+    }
+
+    /// Apply a string-bearing surface op with the same bounded numeric
+    /// argument shape as `op`. The bedroom-PC overlay's `uiLabel` needs four
+    /// numeric arguments before its string, while `uiText` needs only two.
+    #[allow(clippy::too_many_arguments)]
+    pub fn op_string(
+        &mut self,
+        code: u32,
+        argc: usize,
+        a0: i32,
+        a1: i32,
+        a2: i32,
+        a3: i32,
+        a4: i32,
+        a5: i32,
+        a6: i32,
+        text: &str,
+    ) -> bool {
+        if argc > 7 {
+            return false;
+        }
+        let args = [a0, a1, a2, a3, a4, a5, a6];
+        self.scene.op(code, &args[..argc], Some(text));
+        true
     }
 
     /// Select a runtime quality rung. Returns false instead of silently
@@ -352,6 +378,14 @@ mod tests {
         assert!(!runtime.quality(spec::QUALITY.len() as u8));
         runtime.op_text(op::UI_TEXT, 1, 1, "AB");
         assert_eq!(runtime.scene.ui_text.as_ref().unwrap().text, "AB");
+        assert!(runtime.op_string(op::UI_LABEL, 4, 2, 3, 1, -1, 0, 0, 0, "PC"));
+        let pocketvoxel_core::scene::UiOverlayItem::Label(label) =
+            &runtime.scene.ui_overlay[0]
+        else {
+            panic!("uiLabel must retain a label command");
+        };
+        assert_eq!(label.text, "PC");
+        assert!(!runtime.op_string(op::UI_LABEL, 8, 0, 0, 0, 0, 0, 0, 0, "bad"));
         assert!(runtime.set_audio_rate(11025));
         assert!(!runtime.set_audio_rate(48000));
         runtime.render_audio(184);

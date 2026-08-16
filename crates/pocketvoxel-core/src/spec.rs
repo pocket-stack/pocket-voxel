@@ -325,6 +325,10 @@ pub mod op {
     pub const UI_TEXT: u32 = 52;
     pub const UI_REVEAL: u32 = 53;
     pub const UI_CLEAR: u32 = 54;
+    pub const UI_RECT: u32 = 55;
+    pub const UI_LABEL: u32 = 56;
+    pub const UI_OVERLAY_CLEAR: u32 = 57;
+    pub const REMOTE_PLANE: u32 = 58;
     pub const ARENA: u32 = 70;
     pub const CARD: u32 = 71;
     pub const CARD_HIDE: u32 = 72;

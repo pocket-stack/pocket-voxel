@@ -28,9 +28,10 @@ Pocket Voxel is a specialized runtime of
 split inverted: **the game state lives in the guest** (world, battle, script
 VM, menus, saves — every formula cites the Lua it ports), and the Rust core
 owns only the retained scene — cooked voxel chunks, entity billboards, camera
-rungs, the battle stage, a GB UI tile layer, and the chip synth that renders
-the ROM's own sound programs to PCM. Steady-state boundary traffic is a few
-ops per tick against a measured QuickJS budget of ~8k ops per frame.
+rungs, the battle stage, a GB UI tile layer, a bounded native-pixel colour
+overlay, and the chip synth that renders the ROM's own sound programs to PCM.
+Steady-state boundary traffic is a few ops per tick against a measured QuickJS
+budget of ~8k ops per frame.
 
 ## You bring the ROM
 
@@ -144,6 +145,25 @@ Put `EBOOT.PBP` and `voxelmon.vxpak` in one folder under `ms0:/PSP/GAME/`, or
 develop over [PSPLINK](https://github.com/pspdev/psplinkusb) with the pak
 served from `host0:`.
 
+The bedroom computer can consume a live macOS desktop stream from the local
+companion daemon. It uses FFmpeg's AVFoundation capture, converts the selected
+display to **512×128 RGB332 CLUT8 at 12 fps**, pre-squashed for the 2:1 desktop
+window, and continuously publishes the fixed-size
+`pocket-svc/voxelmon/media/desktop.pkst` ring. macOS asks for Screen Recording
+permission the first time the terminal captures a display.
+
+```sh
+brew install ffmpeg
+bun run desktop:serve                         # Capture screen 0; ~/.config/ppsspp
+bun run desktop:serve -- --screen 1 --fps 20 # another display/rate
+bun run desktop:serve -- --dir /path/to/usbhostfs-root
+```
+
+Use `--device "Capture screen 0"` to bypass device discovery. `Ctrl-C` marks
+the stream ended, closes it, stops FFmpeg, and deletes `desktop.pkst` so the
+last captured frames do not persist on disk. The empty service `enable` file
+stays in place so the game can continue to show its waiting state.
+
 ### PS Vita
 
 Needs [VitaSDK](https://vitasdk.org) and
@@ -159,6 +179,17 @@ Copy it over (VitaShell's `SELECT` starts USB or FTP), press `X` on it,
 confirm — that is the whole install. It ships libvita2d's precompiled GXM
 shaders, so a stock HENkaku console does not need Sony's runtime shader
 compiler (`libshacccg.suprx`) the way most Vita 3D homebrew does.
+
+For REMOTE COMPUTER on a Vita, put the Mac and Vita on the same network and
+opt into the PKNT TCP stream plus its UDP discovery beacon:
+
+```sh
+bun run desktop:serve -- --tcp       # TCP 8622, or: --tcp 9000
+```
+
+**Network streaming is off by default.** `--tcp` broadcasts availability and
+serves the live screen to compatible `voxelmon` clients on the local network;
+PKNT does not authenticate peers, so enable it only on a network you trust.
 
 One honest difference from the PSP picture: the GE cuts sprite art out with a
 hardware alpha test and **GXM has none**, so grass, flowers and entity

@@ -25,6 +25,8 @@ import {
   VXPK_TAG,
   VXPK_VERSION,
 } from "../contracts/spec/voxel-spec.ts";
+import { RecorderHost } from "../voxelmon/game/host.ts";
+import { REMOTE_VIDEO_PLANE } from "../voxelmon/game/ui/remote-desktop.ts";
 
 const root = join(import.meta.dir, "..");
 
@@ -39,6 +41,25 @@ test("op codes are unique and never use 0", () => {
   const codes = Object.values(VOX_OP);
   expect(new Set(codes).size).toBe(codes.length);
   expect(codes.includes(0 as never)).toBe(false);
+});
+
+test("remote video keeps the daemon's 2:1 destination contract", () => {
+  expect(VOX_OP.remotePlane).toBe(58);
+  expect(REMOTE_VIDEO_PLANE.w / REMOTE_VIDEO_PLANE.h).toBe(2);
+  expect(REMOTE_VIDEO_PLANE.x * 2 + REMOTE_VIDEO_PLANE.w).toBe(480);
+});
+
+test("RecorderHost preserves every uiLabel numeric arg before its JSON string", () => {
+  const host = new RecorderHost();
+  host.uiRect(1, 2, 3, 4, 0xff112233);
+  host.uiLabel(5, 6, 2, 0xffaabbcc, "PC: A/B");
+  host.remotePlane(7, 8, 320, 180);
+  host.frameDone(0, 0);
+  expect(host.text()).toContain(`o ${VOX_OP.uiRect} 1 2 3 4 ${0xff112233 | 0}`);
+  expect(host.text()).toContain(
+    `s ${VOX_OP.uiLabel} 5 6 2 ${0xffaabbcc | 0} "PC: A/B"`,
+  );
+  expect(host.text()).toContain(`o ${VOX_OP.remotePlane} 7 8 320 180`);
 });
 
 test("new surface ops append without renumbering the existing contract", () => {

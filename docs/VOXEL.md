@@ -113,7 +113,8 @@ tick: `frame(buttons)`, exactly once.
 - retains the scene the guest drives through ops: camera, pitch rung, tint,
   up to 16 entity billboards, removable stamps, emotes, the battle stage, and
   a retained GB UI tile grid (20×18) with a reveal counter for typewriter
-  text;
+  text, plus a bounded native-pixel overlay for coloured modal application
+  chrome;
 - interprets the ROM's sound programs and renders PCM on demand (§8): the
   guest names a song, an effect or a cry in numbers and the core does the
   synthesis, because the same interpreter in QuickJS costs 2.3 s of CPU per
@@ -128,7 +129,8 @@ tick: `frame(buttons)`, exactly once.
   → terrain chunks, each followed by its own
   tree mesh at the level of detail this rung picked (§4a) → water (flat,
   animated atlas) → shadow decals → player ghost (inverted depth, no write) →
-  entity cards → grass mesh → flower mesh → GB UI quads.
+  entity cards → grass mesh → flower mesh → GB UI quads → optional
+  host-video quad → native overlay rectangles.
 
 Per-frame boundary traffic is **~10–40 ops** (camera + moving entities +
 a reveal counter); menu opens burst a few hundred `ui*` ops once. Against the
@@ -162,6 +164,17 @@ drift guard — the `mon-spec.ts` discipline unchanged. Op groups:
   `uiText(x, y, str)` (glyphs resolved core-side through the cooked charmap),
   `uiReveal(n)`, `uiClear()`. The GB UI is a retained tile layer composited
   over the diorama, scaled to fit 480×272.
+- **overlay** — `uiRect(x, y, w, h, abgr)`,
+  `uiLabel(x, y, scale, abgr, str)`, `uiOverlayClear()`. These commands retain
+  native 480×272 pixel rectangles and transparent 5×7 labels, clipped and
+  capped at the core boundary, then composite them after the GB UI. The
+  bedroom PC uses this layer for its centred colour window while leaving the
+  world visible around it.
+- **host video** — `remotePlane(x, y, w, h)` retains one destination rectangle
+  between the GB UI and the native overlay. The guest owns only its geometry
+  and the modal `WAITING`/`LIVE` state. `remoteOpen()`, `remoteTick()` and
+  `remoteClose()` bind a host-owned video-only stream; no captured audio enters
+  the chip-synth path. A non-positive plane size removes it.
 - **battle** — `arena(mapId, x, y, shape, rig)`, `card(side, pic, x, y)`,
   `cardHide(side)`, `battleCam(orbit, pitch, zoom)`, `arenaEnd()`. The two
   solved camera rigs (tele / wide) and the spread correction come from the
@@ -201,7 +214,7 @@ Two rules make it a ladder and not a pile of switches:
   `VOXEL_TREE_BOXES=1` cook flag is the shape this replaces.
 - **The top rung is the identity.** It draws exactly what this runtime drew
   before the ladder existed. `tests/goldens/voxel/*-max.hashes` are the
-  pre-ladder frame hashes and `bun tools/voxel.ts check` replays both tapes at
+  pre-ladder frame hashes and `bun tools/voxel.ts check` replays every tape at
   the top rung against them byte-for-byte, so no later dial edit can quietly
   move the picture the ladder is supposed to preserve.
 
@@ -294,8 +307,8 @@ beyond. Measured over the story trace with this rung's other dials held
 coarse level costs the pak the CHNK growth of one more mesh range per chunk
 plus its quads (ROUTE_1 75 294 → 85 374 packed quads, ~+13%).
 
-Measured over both tapes at every tick, with the other dials held at this
-rung: the worst frame is **flat at 110 144 triangles from 128 px to 144 px and
+Measured over the story and battle tapes at every tick, with the other dials
+held at this rung: the worst frame is **flat at 110 144 triangles from 128 px to 144 px and
 jumps to 117 272 at 160 px**. 128 px is the point in that plateau where every
 pixel the swap costs sits at the horizon or the frame's top edge — 886 px of a
 480×272 frame at `battle-intro`, 438 px in an 11-px strip at the top of
@@ -337,8 +350,8 @@ the near level's quad order and therefore to the identity rung, so it needs
 the `-max` goldens re-proved, not re-recorded.
 
 The `vita` rung is a placeholder, not a measurement: at 192 px it is
-pixel-identical to the top rung across both tapes on the v1 maps, because
-128 px chunks inside a 340 px cap leave room for only two distinct settings
+pixel-identical to the top rung across the story and battle tapes on the v1
+maps, because 128 px chunks inside a 340 px cap leave room for only two distinct settings
 here. It is a labelled rung owed a number from the machine itself.
 
 **What is still over budget after this rung.** With the coarse carve in
@@ -417,6 +430,31 @@ Events are the standard packed batch wire (`u16 kind | u16 a | i32 b | i32 c
 | i32 d`) with **no kinds defined yet** — the core currently states no fact
 the guest does not already know. The channel exists so mesh-streaming or
 host-side timing facts can append later without a wire change.
+
+### 4b. The remote-computer stream
+
+The macOS companion captures one selected AVFoundation screen through FFmpeg,
+scales it to a **512×128 RGB332 CLUT8 frame at 12 fps**, and assigns each
+file session or PKNT connection a non-zero stream epoch. The stored frame is
+anamorphic: the device stretches it into the bedroom PC's 360×180 plane,
+restoring the captured display's proportions while keeping each update near
+65 KiB. The fixed-size
+eight-slot ring bounds both disk use and reader work.
+
+PPSSPP and PSPLINK use the PocketJS service filesystem at
+`pocket-svc/voxelmon/media/desktop.pkst`. The PSP reads at most 26 KiB per
+game tick, validates a slot sequence before and after the chunked read, and
+copies complete CLUT8 pixels into persistent GE memory only after `sceGuSync`.
+The Vita uses PocketJS's PKNT transport over Wi-Fi: `streamOpen` installs the
+same ring image in RAM and video slots use latest-only backpressure. Network
+discovery and screen broadcast are enabled only by the daemon's explicit
+`--tcp` option; the default daemon writes only to the local PPSSPP/usbhostfs
+directory.
+
+The companion unlinks `desktop.pkst` when capture stops because the ring holds
+recent screenshots. Selecting the remote PC freezes the overworld in a normal
+modal game state, retries an absent companion without falling back to the local
+mock desktop, and releases the host stream on `B` or `START`.
 
 ## 5. The asset pipeline
 
@@ -619,7 +657,8 @@ raster work but the fetches and transforms are already paid by then.
 
 Every item here is a deliberate limit with a stated reason:
 
-- **The GB UI, menus, textboxes and the battle screen stay grayscale.**
+- **The GB UI, menus, textboxes and the battle screen stay grayscale.** The
+  native overlay is a separate ABGR layer and does not recolour GB tiles.
   RED++ colours them through named SuperPalettes over SGB zones, which needs
   a `uiPal(x, y, w, h, pal)` op — a new op, so a new spec round. HP-bar
   colour by fill (`GetHealthBarColor`) waits on the same op.
@@ -836,15 +875,16 @@ script runner, the textbox typewriter — and the wild-battle core (damage /
 accuracy / crit / status / catch / run / exp through the oracle-verified
 rules; the early-route effect set; unknown effects degrade via the
 reference's own fallbacks) staged in the voxel arena with the classic GB
-battle screen composited over it. One tape drives Bun, the Rust rasterizer
-(committed hash goldens: 11 story + 4 battle marks, at two quality rungs
-each — §4a) and the PSP capture EBOOT. Sound is the ROM's own channel programs, interpreted and rendered to
-PCM core-side (`pocketvoxel-core/src/audio.rs`, sample-exact against the
-reference over all 303 of them): map themes, the wild-battle and victory
+battle screen composited over it. Three intent tapes drive Bun, the Rust
+rasterizer (committed hash goldens: 11 story + 4 battle + 7 bedroom-computer
+marks, at two quality rungs each — §4a) and the PSP capture EBOOT. Sound is
+the ROM's own channel programs, interpreted and rendered to PCM core-side
+(`pocketvoxel-core/src/audio.rs`, sample-exact against the reference over all
+303 of them): map themes, the wild-battle and victory
 themes, the textbox beep and species cries. Colour is RED++ / pokered-gbc
 **per tile**, baked into the terrain texel index and bound per map (§5),
 oracle-checked against the reference's own `PaletteFX`; the GB UI layer
-stays grayscale.
+stays grayscale, independently of the native colour overlay.
 
 Field entity feet also use the VoxelMod's cooked positive tile support:
 player hop lift is added to the source cell until landing, while NPCs and

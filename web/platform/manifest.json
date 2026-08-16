@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "vxpkVersion": 9,
-  "sourceRevision": "517cbe4d2e60bebd5a5eeac79dd80ce66d9124f0",
-  "guestSha256": "0a0ab79641da83680c367a26845a97642de1aabb4bfc43fda241f43ee5cc6345",
+  "sourceRevision": "8d9645b80d368fa4610858e0bf40830bbd78bb21",
+  "guestSha256": "a3044a94105dea2f47773ad25e1a6529b843fd2c1d06b75c866c02712387977a",
   "psp": {
     "modelRequirement": "PSP-2000 or newer with CFW, or PPSSPP",
     "files": [
       {
         "id": "prx",
         "path": "psp/pocketvoxel-psp.prx",
-        "bytes": 2310696,
-        "sha256": "c401e6c8daeb7bb8c60c4c27ec22962b73c39dd6ade985a8c5713449a0fa45ab"
+        "bytes": 2354564,
+        "sha256": "27b46aad4d926656032968cf6f9a260b28d0244f875ebc934e0bf36bec7ef1d5"
       },
       {
         "id": "icon0",
@@ -39,8 +39,8 @@
       {
         "id": "eboot",
         "path": "vita/eboot.bin",
-        "bytes": 2084778,
-        "sha256": "73269d255987a5740a0bebad10677faef79b2da00c8f706af1dd9b4cb8b0ea34"
+        "bytes": 2252338,
+        "sha256": "aa3461b7b32745bc9306bae8e16ce389f5ad732db6088565a4d7a89c1db9f544"
       },
       {
         "id": "sfo",

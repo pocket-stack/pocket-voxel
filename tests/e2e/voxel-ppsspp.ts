@@ -2,10 +2,10 @@
 //
 //   bun tests/e2e/voxel-ppsspp.ts
 //
-// The one-tape story (docs/VOXEL.md §7.4) cashed in on the console: the
-// SAME recorded story run that produces the committed frame hashes drives
+// One selected tape (story by default; VOXEL_E2E_TAPE overrides it) cashed
+// in on the console: the SAME recorded run that produces frame hashes drives
 // the capture EBOOT — the per-tick button stream and the mark ticks are
-// extracted from dist/voxelmon/trace/story.vtrace and baked into the build,
+// extracted from that tape's vtrace and baked into the build,
 // the run replays under PPSSPP's software renderer (the only byte-stable
 // backend), and each mark's presented frame is dumped and compared against
 // the sim rasterizer's PNG for the same mark.
@@ -39,14 +39,16 @@ import { homedir } from "node:os";
 import { resolvePspBuildToolchain } from "../../tools/psp-toolchain.ts";
 
 const root = new URL("../..", import.meta.url).pathname;
-const outDir = `${root}dist/e2e-voxel`;
+const tape = process.env.VOXEL_E2E_TAPE || "story";
+if (!/^[a-z0-9-]+$/.test(tape)) throw new Error(`invalid VOXEL_E2E_TAPE ${JSON.stringify(tape)}`);
+const outDir = `${root}dist/e2e-voxel${tape === "story" ? "" : `-${tape}`}`;
 const headless = process.env.PPSSPP_HEADLESS || `${homedir()}/ppsspp-src/build/PPSSPPHeadless`;
 // PPSSPPHeadless maps ms0: to ~/.ppsspp — dumps land in ~/.ppsspp/vox_cap.
 // Contents persist across runs; always clean first.
 const capDir = `${homedir()}/.ppsspp/vox_cap`;
 const eboot = `${root}crates/pocketvoxel-psp/target/mipsel-sony-psp/release/EBOOT.PBP`;
 const pak = `${root}dist/voxelmon/voxelmon.vxpak`;
-const trace = `${root}dist/voxelmon/trace/story.vtrace`;
+const trace = `${root}dist/voxelmon/trace/${tape}.vtrace`;
 
 // Measured 2026-08-05 (PPSSPP software renderer vs pocketvoxel-sim, story
 // seed 17, 11 marks): AE at 2% fuzz ranged 639 (oaks-lab) .. 4867 (route-1)
@@ -96,9 +98,9 @@ if (!existsSync(`${root}dist/voxelmon/gen/maps.json`) && !process.env.VOXELMON_R
   skip("no dist/voxelmon/gen/ and no VOXELMON_ROM (ROM-derived inputs absent)");
 }
 
-// ---- 1. pak + trace (the one tape) ---------------------------------------
+// ---- 1. pak + selected trace ----------------------------------------------
 
-console.log("# cook + story trace ...");
+console.log(`# cook + ${tape} trace ...`);
 {
   if (!existsSync(`${root}dist/voxelmon/gen/maps.json`)) {
     const imp = await run(["bun", "tools/voxel.ts", "import"]);
@@ -110,9 +112,9 @@ console.log("# cook + story trace ...");
     "bun",
     "voxelmon/game/sim/cli.ts",
     "--tape",
-    "voxelmon/tapes/story.tape",
+    `voxelmon/tapes/${tape}.tape`,
     "--out",
-    "dist/voxelmon/trace/story.vtrace",
+    `dist/voxelmon/trace/${tape}.vtrace`,
     "--seed",
     "17",
   ]);
@@ -198,11 +200,11 @@ console.log("# build the capture EBOOT ...");
 
 console.log("# PPSSPPHeadless (software renderer) ...");
 rmSync(capDir, { recursive: true, force: true });
-// The story is ~3200 guest turns. The capture EBOOT only renders the 11
-// mark frames (capture.rs: the software renderer draws the Route 1 seam's
-// ~400k triangles at seconds per frame — rendering every in-between frame
-// was measured at >40 minutes), so the run is guest-speed; the ceiling is
-// generous headroom over the measured ~2-4 minutes.
+// Capture only renders marked frames (capture.rs: the software renderer can
+// take seconds for a Route 1 frame) rather than every in-between frame. The
+// story default is ~3200 guest turns; shorter focused tapes use the same
+// capture path. The run is otherwise guest-speed, so this ceiling leaves
+// generous headroom over the measured ~2-4 minutes for the story.
 const timeout = Number(process.env.E2E_TIMEOUT || 1200);
 const ppsspp = await run([headless, "--graphics=software", `--timeout=${timeout}`, eboot], {
   cwd: "/tmp",

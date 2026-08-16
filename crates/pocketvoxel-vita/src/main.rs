@@ -31,6 +31,7 @@
 
 mod audio;
 mod voxel;
+mod remote;
 
 use std::io::Read;
 
@@ -419,7 +420,12 @@ unsafe fn run() {
         // owns its own clear, this one records into a scene that is already
         // cleared.
         v2d::vita2d_set_clear_color(pvx::backdrop(&list));
+        // start_drawing resets vita2d's one temporary vertex pool, and the
+        // remote plane may rewrite or release a texture sampled last frame.
+        // Drain GXM before either resource can be reused.
+        v2d::vita2d_wait_rendering_done();
         v2d::vita2d_start_drawing();
+        remote::present(&mut renderer);
         v2d::vita2d_clear_screen();
         renderer.render(&list, &pak);
         v2d::vita2d_end_drawing();

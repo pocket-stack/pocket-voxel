@@ -477,6 +477,25 @@ class CaptureHost implements VoxelHost {
   uiClear(): void {
     this.rec("uiClear");
   }
+  uiRect(x: number, y: number, w: number, h: number, abgr: number): void {
+    this.rec("uiRect", x, y, w, h, abgr);
+  }
+  uiLabel(x: number, y: number, scale: number, abgr: number, str: string): void {
+    this.rec("uiLabel", x, y, scale, abgr, str);
+  }
+  uiOverlayClear(): void {
+    this.rec("uiOverlayClear");
+  }
+  remotePlane(...a: number[]): void {
+    this.rec("remotePlane", ...a);
+  }
+  remoteOpen(): boolean {
+    return false;
+  }
+  remoteTick(): number {
+    return -1;
+  }
+  remoteClose(): void {}
   arena(...a: number[]): void {
     this.rec("arena", ...a);
   }

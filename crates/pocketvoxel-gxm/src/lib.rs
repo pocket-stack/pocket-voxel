@@ -51,6 +51,7 @@
 
 mod atlas;
 pub mod gxm;
+mod video;
 
 use core::ffi::c_void;
 
@@ -69,9 +70,9 @@ pub const PHYSICAL_W: i32 = VIEW_W * 2;
 pub const PHYSICAL_H: i32 = VIEW_H * 2;
 
 /// Sequential indices for the CPU-built passes, which are all plain triangle
-/// lists. Sized for the largest of them: the GB UI layer is a 20x18 grid, so
-/// 360 quads is its ceiling and this is well past it.
-const SEQUENTIAL_INDICES: usize = 4096;
+/// lists. The overlay expands bounded 5x7 label runs to at most 2048 quads
+/// (12288 vertices), which is the largest CPU-built pass.
+const SEQUENTIAL_INDICES: usize = 16384;
 
 /// CPU-built untextured vertex for sky bands and shadow decals.
 #[repr(C)]
@@ -197,6 +198,9 @@ pub struct Renderer {
     quad: Vec<FlatVert>,
     tex_quad: Vec<TexVert>,
     ui: Vec<TexVert>,
+    /// The companion's latest desktop frame. Its pixels are updated only in
+    /// the GPU-idle window owned by the Vita application shell.
+    remote_video: Option<video::VideoTexture>,
     /// Vertices restaged through the geometric-pull path this frame, and the
     /// draws issued. The frame loop's telemetry reads both.
     pub pull_verts_count: u32,
@@ -254,6 +258,7 @@ impl Renderer {
             quad: Vec::new(),
             tex_quad: Vec::new(),
             ui: Vec::new(),
+            remote_video: None,
             pull_verts_count: 0,
             draw_count: 0,
         })
@@ -337,9 +342,51 @@ impl Renderer {
                     // list, and the whole GB layer is one staged upload and
                     // one draw instead of ~100 of each.
                 }
+                Item::VideoQuad { .. } => {
+                    // Batched after the GB UI and before the window chrome.
+                }
+                Item::OverlayRect { .. } => {
+                    // Batched after ui_batch so it composites over the
+                    // complete GB layer without disturbing that fast path.
+                }
             }
         }
         self.ui_batch(pipeline, list, pak);
+        self.remote_video_quad(pipeline, list);
+        self.overlay_batch(pipeline, list);
+    }
+
+    /// Commit a complete CLUT8 frame into the Vita's persistent RGBA video
+    /// texture. The application shell calls this immediately after
+    /// `vita2d_start_drawing`, where replacing or freeing GPU storage is safe.
+    pub unsafe fn update_remote_video(
+        &mut self,
+        w: u32,
+        h: u32,
+        palette: &[u8],
+        indices: &[u8],
+    ) -> bool {
+        if self
+            .remote_video
+            .as_ref()
+            .is_none_or(|texture| texture.geometry() != (w, h))
+        {
+            self.clear_remote_video();
+            let Ok(texture) = video::VideoTexture::new(w, h) else {
+                return false;
+            };
+            self.remote_video = Some(texture);
+        }
+        self.remote_video
+            .as_mut()
+            .is_some_and(|texture| texture.update(palette, indices))
+    }
+
+    /// Release remote-video storage in the same GPU-idle window.
+    pub unsafe fn clear_remote_video(&mut self) {
+        if let Some(texture) = self.remote_video.take() {
+            texture.free();
+        }
     }
 
     // -- textures ------------------------------------------------------------
@@ -706,6 +753,86 @@ impl Renderer {
         gxm::set_depth(DepthMode::Overlay);
         if pipeline.bind_tex(&logical_ortho().m, TexMode::Alpha) {
             pipeline.draw(staged, self.sequential.as_ptr().cast(), self.ui.len() as u32);
+            self.draw_count += 1;
+        }
+    }
+
+    /// Draw the host-owned desktop texture into the geometry retained by the
+    /// core. The following overlay batch supplies the Win98 frame and labels.
+    unsafe fn remote_video_quad(&mut self, pipeline: &gxm::Pipeline, list: &DrawList) {
+        let Some((x, y, w, h)) = list.items.iter().find_map(|item| match item {
+            Item::VideoQuad { x, y, w, h } => Some((*x, *y, *w, *h)),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(texture) = self.remote_video.as_ref() else {
+            return;
+        };
+
+        self.tex_quad.clear();
+        let corner = |px: i32, py: i32, u: f32, v: f32| TexVert {
+            u,
+            v,
+            x: px as f32,
+            y: py as f32,
+            z: 0.0,
+        };
+        let (x1, y1) = (x.saturating_add(w), y.saturating_add(h));
+        self.tex_quad.extend_from_slice(&[
+            corner(x, y, 0.0, 0.0),
+            corner(x1, y, 1.0, 0.0),
+            corner(x1, y1, 1.0, 1.0),
+            corner(x, y, 0.0, 0.0),
+            corner(x1, y1, 1.0, 1.0),
+            corner(x, y1, 0.0, 1.0),
+        ]);
+        let Some(staged) = stage(&self.tex_quad) else {
+            return;
+        };
+        v2d::sceGxmSetFragmentTexture(v2d::vita2d_get_context(), 0, texture.texture());
+        gxm::set_depth(DepthMode::Overlay);
+        if pipeline.bind_tex(&logical_ortho().m, TexMode::Opaque) {
+            pipeline.draw(staged, self.sequential.as_ptr().cast(), 6);
+            self.draw_count += 1;
+        }
+    }
+
+    /// One staged flat-colour pass for every native-pixel overlay rectangle.
+    /// It follows the untouched GB UI batch and preserves append order within
+    /// the triangle stream for overlapping translucent commands.
+    unsafe fn overlay_batch(&mut self, pipeline: &gxm::Pipeline, list: &DrawList) {
+        self.quad.clear();
+        for item in &list.items {
+            let Item::OverlayRect { x, y, w, h, abgr } = item else {
+                continue;
+            };
+            if self.quad.len() + 6 > SEQUENTIAL_INDICES {
+                break;
+            }
+            let corner = |x: i32, y: i32| FlatVert {
+                abgr: *abgr,
+                x: x as f32,
+                y: y as f32,
+                z: 0.0,
+            };
+            let (x0, y0) = (*x, *y);
+            let (x1, y1) = (x.saturating_add(*w), y.saturating_add(*h));
+            self.quad.extend_from_slice(&[
+                corner(x0, y0),
+                corner(x1, y0),
+                corner(x1, y1),
+                corner(x0, y0),
+                corner(x1, y1),
+                corner(x0, y1),
+            ]);
+        }
+        let Some(staged) = stage(&self.quad) else {
+            return;
+        };
+        gxm::set_depth(DepthMode::Overlay);
+        if pipeline.bind_flat(&logical_ortho().m, true) {
+            pipeline.draw(staged, self.sequential.as_ptr().cast(), self.quad.len() as u32);
             self.draw_count += 1;
         }
     }

@@ -11,6 +11,18 @@ const AUDIO_RATE = 44100;
 interface PocketVoxelCore {
   op(code: number, argc: number, ...args: number[]): boolean;
   op_text(code: number, x: number, y: number, text: string): void;
+  op_string(
+    code: number,
+    argc: number,
+    a0: number,
+    a1: number,
+    a2: number,
+    a3: number,
+    a4: number,
+    a5: number,
+    a6: number,
+    text: string,
+  ): boolean;
   quality(tier: number): boolean;
   tick(): void;
   render(): number;
@@ -94,6 +106,31 @@ class WasmVoxelHost implements VoxelHost {
   uiText(x: number, y: number, str: string): void { this.core.op_text(VOX_OP.uiText, x, y, str); }
   uiReveal(n: number): void { this.call(VOX_OP.uiReveal, n); }
   uiClear(): void { this.call(VOX_OP.uiClear); }
+  uiRect(x: number, y: number, w: number, h: number, abgr: number): void {
+    this.call(VOX_OP.uiRect, x, y, w, h, abgr | 0);
+  }
+  uiLabel(x: number, y: number, scale: number, abgr: number, str: string): void {
+    const accepted = this.core.op_string(
+      VOX_OP.uiLabel,
+      4,
+      x,
+      y,
+      scale,
+      abgr | 0,
+      0,
+      0,
+      0,
+      str,
+    );
+    if (!accepted) throw new Error(`The WASM surface rejected voxel op ${VOX_OP.uiLabel}.`);
+  }
+  uiOverlayClear(): void { this.call(VOX_OP.uiOverlayClear); }
+  remotePlane(x: number, y: number, w: number, h: number): void {
+    this.call(VOX_OP.remotePlane, x, y, w, h);
+  }
+  remoteOpen(): boolean { return false; }
+  remoteTick(): number { return -2; }
+  remoteClose(): void {}
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void {
     this.call(VOX_OP.arena, mapId, x, y, shape, rig);
   }
