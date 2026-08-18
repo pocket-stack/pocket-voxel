@@ -523,7 +523,7 @@ static uint32_t touch_buttons(int down, int x, int y) {
   if (!down || y < 240) return 0;
 
   dx = x - 75;
-  dy = y - 360;
+  dy = y - 350;
   abs_x = dx < 0 ? -dx : dx;
   abs_y = dy < 0 ? -dy : dy;
   if ((abs_x <= 23 && abs_y <= 65) || (abs_y <= 23 && abs_x <= 65)) {
@@ -532,10 +532,10 @@ static uint32_t touch_buttons(int down, int x, int y) {
   }
 
   dx = x - 260;
-  dy = y - 330;
+  dy = y - 320;
   if (dx * dx + dy * dy <= 42 * 42) return BTN_A;
   dx = x - 202;
-  dy = y - 385;
+  dy = y - 375;
   if (dx * dx + dy * dy <= 40 * 40) return BTN_B;
   if (x >= 98 && x <= 144 && y >= 448 && y <= 474) return BTN_SELECT;
   if (x >= 169 && x <= 215 && y >= 448 && y <= 474) return BTN_START;

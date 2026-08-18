@@ -760,7 +760,7 @@ impl Renderer {
         self.face_button(
             0,
             520.0,
-            660.0,
+            640.0,
             66.0,
             buttons & btn::A != 0,
             0xffd8_55dc,
@@ -769,7 +769,7 @@ impl Renderer {
         self.face_button(
             1,
             405.0,
-            770.0,
+            750.0,
             62.0,
             buttons & btn::B != 0,
             0xff70_50df,
@@ -868,7 +868,7 @@ impl Renderer {
         } else {
             self.controls[5]
         };
-        self.control_quad(12.0, 582.0, 276.0, 276.0, texture);
+        self.control_quad(12.0, 562.0, 276.0, 276.0, texture);
     }
 
     unsafe fn control_quad(&mut self, x: f32, y: f32, width: f32, height: f32, texture: GLuint) {

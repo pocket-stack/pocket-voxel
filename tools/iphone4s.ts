@@ -213,10 +213,10 @@ function bakeControlTextures(): Record<string, string> {
     POCKETVOXEL_START_LABEL: bakeLabel('start-label', 'START', 80, 24, 16),
     POCKETVOXEL_MOTION_CREDIT: bakeLabel('motion-credit', '(yui540)', 96, 18, 13),
     POCKETVOXEL_DPAD_IDLE: bakeDpad('dpad-idle'),
-    POCKETVOXEL_DPAD_UP: bakeDpad('dpad-up', '0,0 12,14 255,0 243,14 0,255 0,248 255,255 255,248'),
-    POCKETVOXEL_DPAD_RIGHT: bakeDpad('dpad-right', '0,0 7,0 255,0 241,12 0,255 7,255 255,255 241,243'),
-    POCKETVOXEL_DPAD_DOWN: bakeDpad('dpad-down', '0,0 0,7 255,0 255,7 0,255 12,241 255,255 243,241'),
-    POCKETVOXEL_DPAD_LEFT: bakeDpad('dpad-left', '0,0 14,12 255,0 248,0 0,255 14,243 255,255 248,255'),
+    POCKETVOXEL_DPAD_UP: bakeDpad('dpad-up', '0,0 6,7 255,0 249,7 0,255 0,252 255,255 255,252'),
+    POCKETVOXEL_DPAD_RIGHT: bakeDpad('dpad-right', '0,0 4,0 255,0 248,6 0,255 4,255 255,255 248,249'),
+    POCKETVOXEL_DPAD_DOWN: bakeDpad('dpad-down', '0,0 0,4 255,0 255,4 0,255 6,248 255,255 249,248'),
+    POCKETVOXEL_DPAD_LEFT: bakeDpad('dpad-left', '0,0 7,6 255,0 252,0 0,255 7,249 255,255 252,255'),
   };
 }
 
