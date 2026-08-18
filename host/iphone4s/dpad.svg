@@ -1,0 +1,18 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="cap" x1="128" y1="8" x2="128" y2="240" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#796b80"/>
+      <stop offset="1" stop-color="#5f5365"/>
+    </linearGradient>
+  </defs>
+  <path d="M100 16Q88 16 88 28V96H20Q8 96 8 108V164Q8 176 20 176H88V236Q88 248 100 248H156Q168 248 168 236V176H236Q248 176 248 164V108Q248 96 236 96H168V28Q168 16 156 16Z" fill="#241826"/>
+  <path d="M100 12Q88 12 88 24V92H20Q8 92 8 104V160Q8 172 20 172H88V232Q88 244 100 244H156Q168 244 168 232V172H236Q248 172 248 160V104Q248 92 236 92H168V24Q168 12 156 12Z" fill="#423848"/>
+  <path d="M100 8Q88 8 88 20V88H20Q8 88 8 100V156Q8 168 20 168H88V228Q88 240 100 240H156Q168 240 168 228V168H236Q248 168 248 156V100Q248 88 236 88H168V20Q168 8 156 8Z" fill="url(#cap)" stroke="#8f8195" stroke-width="3"/>
+  <path d="M128 39L111 65H145L128 39Z" fill="#f1f1f1"/>
+  <path d="M217 128L191 111V145L217 128Z" fill="#f1f1f1"/>
+  <path d="M128 217L145 191H111L128 217Z" fill="#f1f1f1"/>
+  <path d="M39 128L65 145V111L39 128Z" fill="#f1f1f1"/>
+  <path d="M100 14H156" stroke="white" stroke-opacity="0.24" stroke-width="4" stroke-linecap="round"/>
+  <path d="M20 98H67" stroke="white" stroke-opacity="0.18" stroke-width="4" stroke-linecap="round"/>
+  <path d="M189 98H236" stroke="white" stroke-opacity="0.18" stroke-width="4" stroke-linecap="round"/>
+</svg>
