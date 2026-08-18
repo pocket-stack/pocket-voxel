@@ -480,8 +480,10 @@ async function deploy(): Promise<void> {
           `trap rollback EXIT HUP INT TERM; test ! -e \"$backup\"; ` +
           `if test -e \"$dest\"; then mv \"$dest\" \"$backup\"; fi; mv \"$stage\" \"$dest\"; ` +
           `chown -R root:wheel \"$dest\"; chmod 755 \"$dest/${EXECUTABLE}\"; ` +
-          `/usr/bin/ldid -e \"$dest/${EXECUTABLE}\" >/dev/null; /bin/su mobile -c /usr/bin/uicache; ` +
-          `trap - EXIT HUP INT TERM; rm -rf \"$backup\"; echo installed-${transaction}`);
+          `/usr/bin/ldid -e \"$dest/${EXECUTABLE}\" >/dev/null; ` +
+          `/bin/su mobile -c '/usr/bin/uicache -p ${INSTALL_PATH}'; ` +
+          `trap - EXIT HUP INT TERM; rm -rf \"$backup\"; ` +
+          `/usr/bin/killall SpringBoard 2>/dev/null || true; echo installed-${transaction}`);
       } catch (error) {
         operationError = error;
         throw error;
