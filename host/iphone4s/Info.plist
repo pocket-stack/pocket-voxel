@@ -16,19 +16,19 @@
   <key>CFBundleName</key>
   <string>Pocket Voxel</string>
   <key>CFBundleIconFile</key>
-  <string>PocketVoxelClassic-v2.png</string>
+  <string>PocketVoxelMark-v3.png</string>
   <key>CFBundleIconFiles</key>
   <array>
-    <string>PocketVoxelClassic-v2</string>
+    <string>PocketVoxelMark-v3</string>
   </array>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleSignature</key>
   <string>????</string>
   <key>CFBundleVersion</key>
-  <string>0.2.1</string>
+  <string>0.2.2</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.2.1</string>
+  <string>0.2.2</string>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
