@@ -34,6 +34,9 @@ const OUTPUT_ROOT = join(ROOT, 'dist/iphone4s');
 const BUNDLE_PATH = join(OUTPUT_ROOT, BUNDLE);
 const RECEIPT_PATH = join(BUNDLE_PATH, 'build-receipt.json');
 const PAK = join(ROOT, 'dist/voxelmon/voxelmon.vxpak');
+const ICON_MASTER = join(ROOT, 'host/iphone4s/art/icon-master.png');
+const LAUNCH_MASTER = join(ROOT, 'host/iphone4s/art/launch-master.png');
+const ICON_BASENAME = 'PocketVoxelClassic-v1';
 const KEY = process.env.POCKETJS_IPHONE4S_KEY ?? join(iphone4sCacheRoot(), 'ssh/id_rsa');
 const KNOWN_HOSTS = process.env.POCKETJS_IPHONE4S_KNOWN_HOSTS ?? join(iphone4sCacheRoot(), 'ssh/known_hosts');
 const KNOWN_HOST_ALIAS = `[127.0.0.1]:${IPHONE4S_TOOLCHAIN.deployment.localPort}`;
@@ -166,12 +169,29 @@ async function withTunnel<T>(operation: (port: number) => Promise<T> | T): Promi
 }
 
 async function bakeArtwork(): Promise<void> {
-  const source = join(ROOT, 'web/favicon.svg');
-  mustRun('magick', [source, '-background', 'none', '-resize', '57x57', '-gravity', 'center', '-extent', '57x57', join(BUNDLE_PATH, 'Icon.png')]);
-  mustRun('magick', [source, '-background', 'none', '-resize', '114x114', '-gravity', 'center', '-extent', '114x114', join(BUNDLE_PATH, 'Icon@2x.png')]);
-  for (const [name, geometry] of [['Default@2x.png', '640x960'], ['Default-568h@2x.png', '640x1136']] as const) {
-    mustRun('magick', ['-size', geometry, 'xc:#070910', source, '-background', 'none', '-resize', '236x236', '-gravity', 'center', '-composite', join(BUNDLE_PATH, name)]);
+  const font = join(ROOT, 'vendor/pocketjs/assets/fonts/InterDisplay-Bold.ttf');
+  for (const [name, geometry] of [[`${ICON_BASENAME}.png`, '57x57'], [`${ICON_BASENAME}@2x.png`, '114x114']] as const) {
+    mustRun('magick', [
+      ICON_MASTER, '-colorspace', 'sRGB', '-filter', 'Lanczos', '-resize', `${geometry}!`,
+      '-unsharp', '0x0.55+0.55+0.02', '-strip', '-depth', '8', join(BUNDLE_PATH, name),
+    ]);
   }
+
+  const launch = join(BUILD_ROOT, 'launch-640x960.png');
+  mustRun('magick', [
+    LAUNCH_MASTER, '-colorspace', 'sRGB', '-filter', 'Lanczos', '-resize', '640x960!',
+    '-font', font, '-gravity', 'north',
+    '-pointsize', '48', '-fill', '#08060acc', '-annotate', '+0+105', 'POCKET VOXEL',
+    '-fill', '#f2ede7', '-annotate', '+0+101', 'POCKET VOXEL',
+    '-pointsize', '18', '-fill', '#0b080dcc', '-annotate', '+0+169', 'A WORLD IN YOUR POCKET',
+    '-fill', '#c8b8cb', '-annotate', '+0+166', 'A WORLD IN YOUR POCKET',
+    '-strip', '-depth', '8', launch,
+  ]);
+  cpSync(launch, join(BUNDLE_PATH, 'Default@2x.png'));
+  mustRun('magick', [
+    launch, '-gravity', 'center', '-background', '#100c12', '-extent', '640x1136',
+    '-strip', '-depth', '8', join(BUNDLE_PATH, 'Default-568h@2x.png'),
+  ]);
 }
 
 function bakeControlTextures(): Record<string, string> {
@@ -181,11 +201,20 @@ function bakeControlTextures(): Record<string, string> {
   if (!existsSync(join(motions, 'letter-a.svg')) || !existsSync(join(motions, 'letter-b.svg'))) {
     throw new Error('PocketJS Motion Lab baked-letter references are missing');
   }
-  const bakeLabel = (name: string, label: string, width: number, height: number, pointSize: number) => {
+  const bakeLabel = (name: string, label: string, width: number, height: number, pointSize: number, color = '#f1f1f1') => {
     const path = output(name);
     mustRun('magick', [
       '-size', `${width}x${height}`, 'xc:none', '-font', font, '-pointsize', String(pointSize),
-      '-fill', '#f1f1f1', '-gravity', 'center', '-annotate', '+0+0', label,
+      '-fill', color, '-gravity', 'center', '-annotate', '+0+0', label,
+      '-depth', '8', `RGBA:${path}`,
+    ]);
+    if (readFileSync(path).byteLength !== width * height * 4) throw new Error(`${name} texture has the wrong size`);
+    return path;
+  };
+  const bakeImage = (name: string, source: string, width: number, height: number) => {
+    const path = output(name);
+    mustRun('magick', [
+      source, '-colorspace', 'sRGB', '-filter', 'Lanczos', '-resize', `${width}x${height}!`,
       '-depth', '8', `RGBA:${path}`,
     ]);
     if (readFileSync(path).byteLength !== width * height * 4) throw new Error(`${name} texture has the wrong size`);
@@ -212,6 +241,12 @@ function bakeControlTextures(): Record<string, string> {
     POCKETVOXEL_SELECT_LABEL: bakeLabel('select-label', 'SELECT', 80, 24, 16),
     POCKETVOXEL_START_LABEL: bakeLabel('start-label', 'START', 80, 24, 16),
     POCKETVOXEL_MOTION_CREDIT: bakeLabel('motion-credit', '(yui540)', 96, 18, 13),
+    POCKETVOXEL_MENU_LABEL: bakeLabel('menu-label', 'MENU', 80, 24, 16),
+    POCKETVOXEL_POPUP_TITLE: bakeLabel('popup-title', 'POCKET VOXEL', 360, 52, 34),
+    POCKETVOXEL_POPUP_SUBTITLE: bakeLabel('popup-subtitle', 'A WORLD IN YOUR POCKET', 320, 30, 17, '#514557'),
+    POCKETVOXEL_POPUP_CREDIT: bakeLabel('popup-credit', 'MOTION STUDIES BY yui540', 320, 30, 16, '#514557'),
+    POCKETVOXEL_DONE_LABEL: bakeLabel('done-label', 'DONE', 96, 28, 18),
+    POCKETVOXEL_POPUP_ICON: bakeImage('popup-icon', ICON_MASTER, 112, 112),
     POCKETVOXEL_DPAD_IDLE: bakeDpad('dpad-idle'),
     POCKETVOXEL_DPAD_UP: bakeDpad('dpad-up', '0,0 6,7 255,0 249,7 0,255 0,252 255,255 255,252'),
     POCKETVOXEL_DPAD_RIGHT: bakeDpad('dpad-right', '0,0 4,0 255,0 248,6 0,255 4,255 255,255 248,249'),
@@ -333,6 +368,9 @@ async function build(): Promise<void> {
     join(ROOT, 'host/iphone4s/runtime.c'),
     join(ROOT, 'host/iphone4s/pocket_runtime.c'),
     join(ROOT, 'host/iphone4s/Info.plist'),
+    join(ROOT, 'host/iphone4s/dpad.svg'),
+    ICON_MASTER,
+    LAUNCH_MASTER,
     join(ROOT, 'tools/iphone4s.ts'),
     join(ROOT, 'crates/pocketvoxel-iphone4s/src/lib.rs'),
     join(ROOT, 'crates/pocketvoxel-iphone4s/src/gles1.rs'),
@@ -369,7 +407,10 @@ async function build(): Promise<void> {
     if (!loads.includes(marker)) throw new Error(`binary is missing ${marker}`);
   }
 
-  const names = [EXECUTABLE, 'Info.plist', 'PkgInfo', 'Icon.png', 'Icon@2x.png', 'Default@2x.png', 'Default-568h@2x.png'];
+  const names = [
+    EXECUTABLE, 'Info.plist', 'PkgInfo', `${ICON_BASENAME}.png`, `${ICON_BASENAME}@2x.png`,
+    'Default@2x.png', 'Default-568h@2x.png',
+  ];
   const receipt: Receipt = {
     schema: 1,
     buildId: identity,

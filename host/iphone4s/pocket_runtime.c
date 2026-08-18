@@ -90,6 +90,11 @@ static JSValue frame_function;
 static char last_error[512];
 static uint32_t buttons;
 static uint32_t previous_buttons;
+static int menu_open;
+static int menu_pressed;
+static int popup_pressed;
+static int touch_was_down;
+static int menu_touch_consumed;
 static unsigned long action_sequence;
 static pthread_mutex_t scene_lock = PTHREAD_MUTEX_INITIALIZER;
 static AudioQueueRef audio_queue;
@@ -542,6 +547,51 @@ static uint32_t touch_buttons(int down, int x, int y) {
   return 0;
 }
 
+static int point_in_rect(int x, int y, int left, int top, int right, int bottom) {
+  return x >= left && x <= right && y >= top && y <= bottom;
+}
+
+static void update_menu_touch(int down, int x, int y) {
+  int menu_hit = point_in_rect(x, y, 137, 250, 183, 273);
+  int popup_hit = point_in_rect(x, y, 36, 92, 284, 352);
+  int done_hit = point_in_rect(x, y, 122, 305, 198, 333);
+
+  if (!down) {
+    if (popup_pressed && done_hit) {
+      menu_open = 0;
+      action_sequence += 1;
+    } else if (menu_pressed && menu_hit) {
+      menu_open = !menu_open;
+      action_sequence += 1;
+    }
+    touch_was_down = 0;
+    menu_pressed = 0;
+    popup_pressed = 0;
+    menu_touch_consumed = 0;
+    return;
+  }
+  if (touch_was_down) return;
+  touch_was_down = 1;
+
+  if (menu_open) {
+    menu_touch_consumed = 1;
+    if (done_hit) {
+      popup_pressed = 1;
+    } else if (menu_hit) {
+      menu_pressed = 1;
+    } else if (!popup_hit) {
+      menu_open = 0;
+      action_sequence += 1;
+    }
+    return;
+  }
+
+  if (menu_hit) {
+    menu_touch_consumed = 1;
+    menu_pressed = 1;
+  }
+}
+
 int pocket_runtime_boot(
   const char *java_script,
   size_t java_script_length,
@@ -599,7 +649,8 @@ int pocket_runtime_frame(int touch_down, int touch_x, int touch_y, int touch_hit
   int job;
   (void)touch_hit;
   if (context == NULL) return 0;
-  buttons = touch_buttons(touch_down, touch_x, touch_y);
+  update_menu_touch(touch_down, touch_x, touch_y);
+  buttons = menu_open || menu_touch_consumed ? 0 : touch_buttons(touch_down, touch_x, touch_y);
   if (buttons != 0 && buttons != previous_buttons) action_sequence += 1;
   previous_buttons = buttons;
   argument = JS_NewInt32(context, (int32_t)buttons);
@@ -650,6 +701,8 @@ int pocket_runtime_frame_ticks(
 }
 
 int pocket_runtime_hit_test(float x, float y) {
+  if (menu_open) return 1;
+  if (point_in_rect((int)x, (int)y, 137, 250, 183, 273)) return 1;
   return touch_buttons(1, (int)x, (int)y) != 0;
 }
 
@@ -686,8 +739,12 @@ int pocket_runtime_gl_initialize(void) {
 
 int pocket_runtime_gl_render(int width, int height) {
   int rendered;
+  uint32_t rendered_buttons = buttons;
+  if (menu_open) rendered_buttons |= 0x80000000u;
+  if (menu_pressed) rendered_buttons |= 0x40000000u;
+  if (popup_pressed) rendered_buttons |= 0x20000000u;
   pthread_mutex_lock(&scene_lock);
-  rendered = pocketvoxel_render(width, height, buttons);
+  rendered = pocketvoxel_render(width, height, rendered_buttons);
   pthread_mutex_unlock(&scene_lock);
   return rendered;
 }

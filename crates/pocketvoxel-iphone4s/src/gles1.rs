@@ -57,11 +57,21 @@ const LETTER_B: &[u8; 64 * 64 * 4] = include_bytes!(env!("POCKETVOXEL_LETTER_B")
 const SELECT_LABEL: &[u8; 80 * 24 * 4] = include_bytes!(env!("POCKETVOXEL_SELECT_LABEL"));
 const START_LABEL: &[u8; 80 * 24 * 4] = include_bytes!(env!("POCKETVOXEL_START_LABEL"));
 const MOTION_CREDIT: &[u8; 96 * 18 * 4] = include_bytes!(env!("POCKETVOXEL_MOTION_CREDIT"));
+const MENU_LABEL: &[u8; 80 * 24 * 4] = include_bytes!(env!("POCKETVOXEL_MENU_LABEL"));
+const POPUP_TITLE: &[u8; 360 * 52 * 4] = include_bytes!(env!("POCKETVOXEL_POPUP_TITLE"));
+const POPUP_SUBTITLE: &[u8; 320 * 30 * 4] = include_bytes!(env!("POCKETVOXEL_POPUP_SUBTITLE"));
+const POPUP_CREDIT: &[u8; 320 * 30 * 4] = include_bytes!(env!("POCKETVOXEL_POPUP_CREDIT"));
+const DONE_LABEL: &[u8; 96 * 28 * 4] = include_bytes!(env!("POCKETVOXEL_DONE_LABEL"));
+const POPUP_ICON: &[u8; 112 * 112 * 4] = include_bytes!(env!("POCKETVOXEL_POPUP_ICON"));
 const DPAD_IDLE: &[u8; 256 * 256 * 4] = include_bytes!(env!("POCKETVOXEL_DPAD_IDLE"));
 const DPAD_UP: &[u8; 256 * 256 * 4] = include_bytes!(env!("POCKETVOXEL_DPAD_UP"));
 const DPAD_RIGHT: &[u8; 256 * 256 * 4] = include_bytes!(env!("POCKETVOXEL_DPAD_RIGHT"));
 const DPAD_DOWN: &[u8; 256 * 256 * 4] = include_bytes!(env!("POCKETVOXEL_DPAD_DOWN"));
 const DPAD_LEFT: &[u8; 256 * 256 * 4] = include_bytes!(env!("POCKETVOXEL_DPAD_LEFT"));
+
+const UI_MENU_OPEN: u32 = 0x8000_0000;
+const UI_MENU_PRESSED: u32 = 0x4000_0000;
+const UI_POPUP_PRESSED: u32 = 0x2000_0000;
 
 unsafe extern "C" {
     fn glAlphaFunc(function: GLenum, reference: GLfloat);
@@ -161,7 +171,7 @@ pub struct Renderer {
     flat: Vec<FlatVertex>,
     last_tint: u32,
     depth: GLuint,
-    controls: [GLuint; 10],
+    controls: [GLuint; 16],
 }
 
 impl Renderer {
@@ -173,7 +183,7 @@ impl Renderer {
             flat: Vec::new(),
             last_tint: 0xffff_ffff,
             depth: 0,
-            controls: [0; 10],
+            controls: [0; 16],
         }
     }
 
@@ -210,6 +220,12 @@ impl Renderer {
             (DPAD_RIGHT.as_slice(), 256, 256),
             (DPAD_DOWN.as_slice(), 256, 256),
             (DPAD_LEFT.as_slice(), 256, 256),
+            (MENU_LABEL.as_slice(), 80, 24),
+            (POPUP_TITLE.as_slice(), 360, 52),
+            (POPUP_SUBTITLE.as_slice(), 320, 30),
+            (POPUP_CREDIT.as_slice(), 320, 30),
+            (DONE_LABEL.as_slice(), 96, 28),
+            (POPUP_ICON.as_slice(), 112, 112),
         ]
         .into_iter()
         .enumerate()
@@ -757,51 +773,44 @@ impl Renderer {
 
         self.dpad(buttons);
 
-        self.face_button(
-            0,
-            520.0,
-            640.0,
-            66.0,
-            buttons & btn::A != 0,
-            0xffd8_55dc,
-            0xfff0_78ee,
-        );
-        self.face_button(
-            1,
-            405.0,
-            750.0,
-            62.0,
-            buttons & btn::B != 0,
-            0xff70_50df,
-            0xff90_70ff,
-        );
+        self.face_button(0, 520.0, 640.0, 66.0, buttons & btn::A != 0);
+        self.face_button(1, 405.0, 750.0, 62.0, buttons & btn::B != 0);
 
-        let active = 0xff86_73ff;
-        self.color_rect(
+        self.system_button(
             196.0,
-            896.0,
+            892.0,
             92.0,
-            36.0,
-            if buttons & btn::SELECT != 0 {
-                active
-            } else {
-                0xff50_4651
-            },
+            40.0,
+            buttons & btn::SELECT != 0,
+            self.controls[2],
+            80.0,
+            24.0,
         );
-        self.control_quad(202.0, 902.0, 80.0, 24.0, self.controls[2]);
-        self.color_rect(
+        self.system_button(
             338.0,
-            896.0,
+            892.0,
             92.0,
-            36.0,
-            if buttons & btn::START != 0 {
-                active
-            } else {
-                0xff50_4651
-            },
+            40.0,
+            buttons & btn::START != 0,
+            self.controls[3],
+            80.0,
+            24.0,
         );
-        self.control_quad(344.0, 902.0, 80.0, 24.0, self.controls[3]);
+        self.system_button(
+            274.0,
+            500.0,
+            92.0,
+            40.0,
+            buttons & UI_MENU_PRESSED != 0,
+            self.controls[10],
+            80.0,
+            24.0,
+        );
         self.control_quad(536.0, 940.0, 96.0, 18.0, self.controls[4]);
+
+        if buttons & UI_MENU_OPEN != 0 {
+            self.menu_popup(buttons & UI_POPUP_PRESSED != 0);
+        }
         glDisable(GL_BLEND);
         glDepthMask(GL_TRUE);
     }
@@ -839,13 +848,16 @@ impl Renderer {
         cy: f32,
         radius: f32,
         pressed: bool,
-        cap: u32,
-        active: u32,
     ) {
         let offset = if pressed { 9.0 } else { 0.0 };
         self.disc(cx, cy + 13.0, radius + 4.0, 0xff24_1729);
-        self.disc(cx, cy + 8.0, radius + 2.0, 0xff65_3c72);
-        self.disc(cx, cy + offset, radius, if pressed { active } else { cap });
+        self.disc(cx, cy + 8.0, radius + 2.0, 0xff48_3842);
+        self.disc(
+            cx,
+            cy + offset,
+            radius,
+            if pressed { 0xff65_535f } else { 0xff80_6b79 },
+        );
         self.disc(cx - 8.0, cy - 8.0 + offset, radius - 10.0, 0x20ff_ffff);
         self.control_quad(
             cx - 32.0,
@@ -853,6 +865,71 @@ impl Renderer {
             64.0,
             64.0,
             self.controls[texture_index],
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn system_button(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        pressed: bool,
+        texture: GLuint,
+        label_width: f32,
+        label_height: f32,
+    ) {
+        let offset = if pressed { 3.0 } else { 0.0 };
+        let radius = (height * 0.28).min(14.0);
+        self.rounded_rect(x, y + 6.0, width, height, radius, 0xff24_1824);
+        self.rounded_rect(x, y + 3.0, width, height, radius, 0xff48_3842);
+        self.rounded_rect(
+            x,
+            y + offset,
+            width,
+            height,
+            radius,
+            if pressed { 0xff65_535f } else { 0xff80_6b79 },
+        );
+        if !pressed {
+            self.rounded_rect(x + 10.0, y + 3.0, width - 20.0, 4.0, 2.0, 0xff95_818f);
+        }
+        self.control_quad(
+            x + (width - label_width) * 0.5,
+            y + (height - label_height) * 0.5 + offset,
+            label_width,
+            label_height,
+            texture,
+        );
+    }
+
+    unsafe fn menu_popup(&mut self, done_pressed: bool) {
+        // Native GLES1 rendering of Pocket UI's Modal contract: a modal
+        // scrim, elevated rounded panel, title region, content and action.
+        self.color_rect(0.0, 0.0, 640.0, 960.0, 0xa81a_111b);
+
+        self.rounded_rect(68.0, 198.0, 504.0, 520.0, 30.0, 0xff18_1019);
+        self.rounded_rect(72.0, 184.0, 496.0, 520.0, 28.0, 0xfff1_ecf1);
+        self.rounded_rect(72.0, 184.0, 496.0, 104.0, 28.0, 0xff48_3842);
+        self.color_rect(72.0, 240.0, 496.0, 48.0, 0xff48_3842);
+        self.color_rect(96.0, 288.0, 448.0, 3.0, 0xff95_818f);
+
+        self.control_quad(140.0, 202.0, 360.0, 52.0, self.controls[11]);
+        self.control_quad(160.0, 298.0, 320.0, 30.0, self.controls[12]);
+        self.rounded_rect(250.0, 348.0, 140.0, 140.0, 24.0, 0xff48_3842);
+        self.control_quad(264.0, 362.0, 112.0, 112.0, self.controls[15]);
+        self.color_rect(120.0, 510.0, 400.0, 2.0, 0xffd0_c5d1);
+        self.control_quad(160.0, 530.0, 320.0, 30.0, self.controls[13]);
+        self.system_button(
+            244.0,
+            610.0,
+            152.0,
+            50.0,
+            done_pressed,
+            self.controls[14],
+            96.0,
+            28.0,
         );
     }
 
@@ -922,6 +999,24 @@ impl Renderer {
         }
         self.bind_flat();
         glDrawArrays(GL_TRIANGLE_FAN, 0, self.flat.len() as i32);
+    }
+
+    unsafe fn rounded_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        radius: f32,
+        color: u32,
+    ) {
+        let radius = radius.min(width * 0.5).min(height * 0.5).max(0.0);
+        self.color_rect(x + radius, y, width - radius * 2.0, height, color);
+        self.color_rect(x, y + radius, width, height - radius * 2.0, color);
+        self.disc(x + radius, y + radius, radius, color);
+        self.disc(x + width - radius, y + radius, radius, color);
+        self.disc(x + radius, y + height - radius, radius, color);
+        self.disc(x + width - radius, y + height - radius, radius, color);
     }
 }
 
