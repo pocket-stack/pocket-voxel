@@ -36,7 +36,7 @@ const RECEIPT_PATH = join(BUNDLE_PATH, 'build-receipt.json');
 const PAK = join(ROOT, 'dist/voxelmon/voxelmon.vxpak');
 const ICON_MASTER = join(ROOT, 'host/iphone4s/art/icon-master.png');
 const LAUNCH_MASTER = join(ROOT, 'host/iphone4s/art/launch-master.png');
-const ICON_BASENAME = 'PocketVoxelClassic-v1';
+const ICON_BASENAME = 'PocketVoxelClassic-v2';
 const KEY = process.env.POCKETJS_IPHONE4S_KEY ?? join(iphone4sCacheRoot(), 'ssh/id_rsa');
 const KNOWN_HOSTS = process.env.POCKETJS_IPHONE4S_KNOWN_HOSTS ?? join(iphone4sCacheRoot(), 'ssh/known_hosts');
 const KNOWN_HOST_ALIAS = `[127.0.0.1]:${IPHONE4S_TOOLCHAIN.deployment.localPort}`;
@@ -170,11 +170,17 @@ async function withTunnel<T>(operation: (port: number) => Promise<T> | T): Promi
 
 async function bakeArtwork(): Promise<void> {
   const font = join(ROOT, 'vendor/pocketjs/assets/fonts/InterDisplay-Bold.ttf');
-  for (const [name, geometry] of [[`${ICON_BASENAME}.png`, '57x57'], [`${ICON_BASENAME}@2x.png`, '114x114']] as const) {
+  for (const [name, size, radius] of [[`${ICON_BASENAME}.png`, 57, 10.5], [`${ICON_BASENAME}@2x.png`, 114, 21]] as const) {
+    const output = join(BUNDLE_PATH, name);
     mustRun('magick', [
-      ICON_MASTER, '-colorspace', 'sRGB', '-filter', 'Lanczos', '-resize', `${geometry}!`,
-      '-unsharp', '0x0.55+0.55+0.02', '-strip', '-depth', '8', join(BUNDLE_PATH, name),
+      ICON_MASTER, '-colorspace', 'sRGB', '-filter', 'Lanczos', '-resize', `${size}x${size}!`,
+      '-unsharp', '0x0.55+0.55+0.02',
+      '(', '-size', `${size}x${size}`, 'xc:none', '-fill', 'white',
+      '-draw', `roundrectangle 0,0,${size - 1},${size - 1},${radius},${radius}`, ')',
+      '-compose', 'CopyOpacity', '-composite', '-strip', '-depth', '8', `PNG32:${output}`,
     ]);
+    const alpha = mustRun('magick', ['identify', '-format', `%[channels] %[fx:p{0,0}.a] %[fx:p{${Math.floor(size / 2)},${Math.floor(size / 2)}}.a]`, output]);
+    if (alpha !== 'srgba 4.0 0 1') throw new Error(`${name} must have transparent corners and an opaque center; got ${alpha}`);
   }
 
   const launch = join(BUILD_ROOT, 'launch-640x960.png');
