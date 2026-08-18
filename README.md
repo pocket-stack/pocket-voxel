@@ -197,6 +197,35 @@ billboards blend instead of clipping, and give up their baked ambient
 occlusion to do it. Solid geometry and the Game Boy UI layer are unaffected —
 [docs/VOXEL.md §12](docs/VOXEL.md) has the per-pass accounting.
 
+### iPhone 4S (iOS 6)
+
+The jailbroken iPhone 4S target is a standalone portrait application. It uses
+PocketJS's pinned iOS 6 ARMv7 toolchain and GLES 1.1 shell, embeds the cooked
+VXPK in `PocketVoxel.app`, renders the game in the upper half of the Retina
+display, streams the core's stereo PCM through Audio Queue Services, and draws
+touch D-pad, A/B, Start, and Select controls in the lower half. The raised
+controls reuse Motion Lab's baked-letter and D-pad visual vocabulary, with the
+required `(yui540)` credit kept on-screen; its accepted permission boundary is
+recorded in
+[`vendor/pocketjs/apps/motions/ATTRIBUTION.md`](vendor/pocketjs/apps/motions/ATTRIBUTION.md).
+Nothing ROM-derived is committed.
+
+```sh
+export VOXELMON_ROM=/path/to/PokemonRed.gb
+bun tools/voxel.ts import
+bun tools/voxel.ts cook
+bun iphone4s doctor
+bun iphone4s deploy
+bun iphone4s launch
+bun iphone4s status
+bun iphone4s capture
+```
+
+The deploy command accepts only the validated iPhone 4S/iOS 6.1.3 identity,
+uses key-only USB SSH, verifies every staged file byte-for-byte, and atomically
+replaces only `/Applications/PocketVoxel.app`. The installed app launches from
+its own SpringBoard icon and does not need a companion process or pak file.
+
 ## Tests
 
 ```sh

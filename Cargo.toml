@@ -16,6 +16,7 @@ members = [
     "crates/pocketvoxel-wasm",
 ]
 exclude = [
+    "crates/pocketvoxel-iphone4s",
     "crates/pocketvoxel-gxm",
     "crates/pocketvoxel-gu",
     "crates/pocketvoxel-psp",

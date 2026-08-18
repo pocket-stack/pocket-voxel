@@ -5,6 +5,7 @@
 # `dist` SYMLINK — which is how a second worktree borrows one cooked pak
 # instead of re-cooking 32 MB — slips past `dist/` and lands in a commit.
 /dist
+/.pocket-build/
 /node_modules
 dist/
 target/
