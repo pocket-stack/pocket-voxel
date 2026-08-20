@@ -8,6 +8,7 @@ description = "Native Pocket Voxel host for the M5Stack Cardputer Zero"
 [dependencies]
 anyhow = "1"
 env_logger = "0.11"
+glow = "0.18"
 libc = "0.2"
 log = "0.4"
 pocket-mod = { path = "../../vendor/pocketjs/engine/crates/pocket-mod" }

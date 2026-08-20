@@ -165,7 +165,7 @@ impl AudioSink {
                 "--format=s16",
                 "--channels=2",
                 &format!("--rate={rate}"),
-                "--latency=100ms",
+                "--latency=200ms",
                 "-",
             ])
             .stdin(Stdio::piped())

@@ -500,14 +500,24 @@ async function buildCardputer(install: boolean): Promise<number> {
     [
       adb,
       "shell",
-      "cat /sys/class/graphics/fb0/virtual_size; cat /sys/class/graphics/fb0/bits_per_pixel; uname -m",
+      "cat /sys/class/graphics/fb0/virtual_size; cat /sys/class/graphics/fb0/bits_per_pixel; uname -m; awk '/^CmaTotal:/ { print $2 }' /proc/meminfo",
     ],
     { stdout: "pipe", stderr: "pipe" },
   );
   const identity = probe.stdout.toString().trim().split(/\s+/);
-  if (probe.exitCode !== 0 || identity.join(" ") !== "320,170 16 aarch64") {
+  if (
+    probe.exitCode !== 0 ||
+    identity.length !== 4 ||
+    identity.slice(0, 3).join(" ") !== "320,170 16 aarch64"
+  ) {
     console.error(
       `voxel cardputer: connected target is not the 320x170 RGB565 aarch64 device (${identity.join(" ") || "no response"})`,
+    );
+    return 1;
+  }
+  if (Number(identity[3]) < 65536) {
+    console.error(
+      "voxel cardputer: VC4/V3D needs at least 64 MiB CMA; set cma=64M in /boot/firmware/cmdline.txt and reboot",
     );
     return 1;
   }
