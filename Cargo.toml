@@ -10,6 +10,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/pocketvoxel-cardputer",
     "crates/pocketvoxel-core",
     "crates/pocketvoxel-packager-wasm",
     "crates/pocketvoxel-sim",

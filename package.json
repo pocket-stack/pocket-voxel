@@ -10,6 +10,8 @@
     "shots": "bun tools/voxel.ts shots",
     "psp": "bun tools/voxel.ts psp --release",
     "vita": "bun tools/voxel.ts vita --release",
+    "cardputer": "bun tools/voxel.ts cardputer",
+    "cardputer:install": "bun tools/voxel.ts cardputer --install",
     "desktop:serve": "bun host/desktop-stream/serve.ts",
     "web:refs": "bun web/scripts/build-reference.ts",
     "web:build": "bun web/scripts/build.ts",

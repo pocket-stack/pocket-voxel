@@ -1,0 +1,15 @@
+[package]
+name = "pocketvoxel-cardputer"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Native Pocket Voxel host for the M5Stack Cardputer Zero"
+
+[dependencies]
+anyhow = "1"
+env_logger = "0.11"
+libc = "0.2"
+log = "0.4"
+pocket-mod = { path = "../../vendor/pocketjs/engine/crates/pocket-mod" }
+pocketvoxel-core = { path = "../pocketvoxel-core" }
+pocketvoxel-sim = { path = "../pocketvoxel-sim" }

@@ -197,6 +197,27 @@ billboards blend instead of clipping, and give up their baked ambient
 occlusion to do it. Solid geometry and the Game Boy UI layer are unaffected —
 [docs/VOXEL.md §12](docs/VOXEL.md) has the per-pass accounting.
 
+### Cardputer Zero
+
+The native Cardputer Zero host targets its internal **320×170 RGB565** LCD
+and TCA8418 keyboard. Pocket Voxel keeps the **480×272 logical viewport** and
+renders directly at **300×170**, centered with 10-pixel black bars on both
+sides; the image is not stretched or cropped.
+
+Install the Rust target and cross-linker once, connect the device over ADB,
+then build, cook the local ROM-derived pak, and add Pocket Voxel to APPLaunch:
+
+```sh
+rustup target add aarch64-unknown-linux-gnu --toolchain stable
+cargo install cargo-zigbuild
+VOXELMON_ROM=/path/to/PokemonRed.gb bun run cardputer:install
+```
+
+Use the arrow keys or `WASD` to move. `Enter`, `Space`, `Z`, or `J` confirms;
+`Backspace`, `X`, or `K` cancels; `P` is Start, `O`/`Q` is Select, and `Esc`
+returns to APPLaunch. The host preserves 60 Hz game logic, presents at 30 fps,
+and sends the core's 11.025 kHz stereo output through PipeWire.
+
 ## Tests
 
 ```sh

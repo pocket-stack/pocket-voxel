@@ -24,18 +24,26 @@ pub const H: usize = VIEW_H as usize;
 pub struct Frame {
     pub color: Vec<u32>,
     pub depth: Vec<f32>,
+    pub width: usize,
+    pub height: usize,
 }
 
 impl Frame {
     pub fn new() -> Self {
+        Self::with_size(W, H)
+    }
+
+    pub fn with_size(width: usize, height: usize) -> Self {
         Self {
-            color: vec![0xff00_0000; W * H],
-            depth: vec![f32::INFINITY; W * H],
+            color: vec![0xff00_0000; width * height],
+            depth: vec![f32::INFINITY; width * height],
+            width,
+            height,
         }
     }
 
     pub fn rgba_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(W * H * 4);
+        let mut out = Vec::with_capacity(self.width * self.height * 4);
         for c in &self.color {
             out.extend_from_slice(&c.to_le_bytes());
         }
@@ -153,15 +161,15 @@ struct SV {
     rgba: [f32; 4],
 }
 
-fn project(p: &PV) -> Option<SV> {
+fn project(p: &PV, width: usize, height: usize) -> Option<SV> {
     let w = p.clip[3];
     if w <= 0.0 {
         return None; // defensive: near clip leaves w > 0 for real cameras
     }
     let iw = 1.0 / w;
     Some(SV {
-        x: (p.clip[0] * iw * 0.5 + 0.5) * W as f32,
-        y: (1.0 - (p.clip[1] * iw * 0.5 + 0.5)) * H as f32,
+        x: (p.clip[0] * iw * 0.5 + 0.5) * width as f32,
+        y: (1.0 - (p.clip[1] * iw * 0.5 + 0.5)) * height as f32,
         z: p.clip[2] * iw,
         iw,
         u: p.u * iw,
@@ -222,10 +230,10 @@ fn blend_over(dst: u32, rgb: [u32; 3], a: u32) -> u32 {
 }
 
 fn draw_overlay_rect(frame: &mut Frame, x: i32, y: i32, w: i32, h: i32, abgr: u32) {
-    let x0 = x.clamp(0, W as i32) as usize;
-    let y0 = y.clamp(0, H as i32) as usize;
-    let x1 = x.saturating_add(w.max(0)).clamp(0, W as i32) as usize;
-    let y1 = y.saturating_add(h.max(0)).clamp(0, H as i32) as usize;
+    let x0 = x.clamp(0, frame.width as i32) as usize;
+    let y0 = y.clamp(0, frame.height as i32) as usize;
+    let x1 = x.saturating_add(w.max(0)).clamp(0, frame.width as i32) as usize;
+    let y1 = y.saturating_add(h.max(0)).clamp(0, frame.height as i32) as usize;
     if x1 <= x0 || y1 <= y0 {
         return;
     }
@@ -233,7 +241,7 @@ fn draw_overlay_rect(frame: &mut Frame, x: i32, y: i32, w: i32, h: i32, abgr: u3
     let a = (abgr >> 24) & 0xff;
     for py in y0..y1 {
         for px in x0..x1 {
-            let dst = &mut frame.color[py * W + px];
+            let dst = &mut frame.color[py * frame.width + px];
             *dst = blend_over(*dst, rgb, a);
         }
     }
@@ -243,14 +251,14 @@ fn draw_overlay_rect(frame: &mut Frame, x: i32, y: i32, w: i32, h: i32, abgr: u3
 /// the plane visible in screenshots and goldens without pretending it is a
 /// captured frame; device backends replace this entire item with live pixels.
 fn draw_video_placeholder(frame: &mut Frame, x: i32, y: i32, w: i32, h: i32) {
-    let x0 = x.clamp(0, W as i32) as usize;
-    let y0 = y.clamp(0, H as i32) as usize;
-    let x1 = x.saturating_add(w.max(0)).clamp(0, W as i32) as usize;
-    let y1 = y.saturating_add(h.max(0)).clamp(0, H as i32) as usize;
+    let x0 = x.clamp(0, frame.width as i32) as usize;
+    let y0 = y.clamp(0, frame.height as i32) as usize;
+    let x1 = x.saturating_add(w.max(0)).clamp(0, frame.width as i32) as usize;
+    let y1 = y.saturating_add(h.max(0)).clamp(0, frame.height as i32) as usize;
     for py in y0..y1 {
         for px in x0..x1 {
             let cell = ((px - x0) / 8 + (py - y0) / 8) & 1;
-            frame.color[py * W + px] = if cell == 0 { 0xff20_1810 } else { 0xff30_2818 };
+            frame.color[py * frame.width + px] = if cell == 0 { 0xff20_1810 } else { 0xff30_2818 };
         }
     }
 }
@@ -266,11 +274,14 @@ fn draw_clip_tri(
     if poly.len() < 3 {
         return;
     }
-    let Some(first) = project(&poly[0]) else {
+    let Some(first) = project(&poly[0], frame.width, frame.height) else {
         return;
     };
     for i in 1..poly.len() - 1 {
-        let (Some(b), Some(c)) = (project(&poly[i]), project(&poly[i + 1])) else {
+        let (Some(b), Some(c)) = (
+            project(&poly[i], frame.width, frame.height),
+            project(&poly[i + 1], frame.width, frame.height),
+        ) else {
             continue;
         };
         raster_tri(frame, [first, b, c], tex, depth, blend);
@@ -297,7 +308,7 @@ fn raster_tri(frame: &mut Frame, v: [SV; 3], tex: Option<&TexCtx>, depth: DepthM
         .map(|p| p.x)
         .fold(f32::NEG_INFINITY, f32::max)
         .ceil() as usize)
-        .min(W);
+        .min(frame.width);
     let min_y = v
         .iter()
         .map(|p| p.y)
@@ -309,7 +320,7 @@ fn raster_tri(frame: &mut Frame, v: [SV; 3], tex: Option<&TexCtx>, depth: DepthM
         .map(|p| p.y)
         .fold(f32::NEG_INFINITY, f32::max)
         .ceil() as usize)
-        .min(H);
+        .min(frame.height);
 
     for py in min_y..max_y {
         let cy = py as f32 + 0.5;
@@ -323,7 +334,7 @@ fn raster_tri(frame: &mut Frame, v: [SV; 3], tex: Option<&TexCtx>, depth: DepthM
             if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                 continue;
             }
-            let idx = py * W + px;
+            let idx = py * frame.width + px;
             let z = w0 * v[0].z + w1 * v[1].z + w2 * v[2].z;
             let pass = match depth {
                 DepthMode::LessWrite | DepthMode::LessNoWrite => z < frame.depth[idx],
@@ -422,7 +433,31 @@ fn quad_tris<F: FnMut([PV; 3])>(quad: [PV; 4], mut emit: F) {
 
 /// Rasterize one draw list against the pak's palettes and cached atlases.
 pub fn render(list: &DrawList, pak: &Pak, cache: &AtlasCache) -> Frame {
-    let mut frame = Frame::new();
+    render_at(list, pak, cache, W, H)
+}
+
+/// Rasterize at an aspect-compatible physical resolution.
+///
+/// World projection scales directly into `width` x `height`; screen-space UI
+/// and overlays retain their 480x272 logical coordinates and are mapped here.
+/// The simulator and committed goldens continue through [`render`] unchanged.
+pub fn render_at(
+    list: &DrawList,
+    pak: &Pak,
+    cache: &AtlasCache,
+    width: usize,
+    height: usize,
+) -> Frame {
+    let mut frame = Frame::with_size(width, height);
+    let sx = width as f32 / VIEW_W as f32;
+    let sy = height as f32 / VIEW_H as f32;
+    let scale_rect = |x: i32, y: i32, w: i32, h: i32| -> (i32, i32, i32, i32) {
+        let x0 = (x as f32 * sx).floor() as i32;
+        let y0 = (y as f32 * sy).floor() as i32;
+        let x1 = ((x.saturating_add(w.max(0))) as f32 * sx).ceil() as i32;
+        let y1 = ((y.saturating_add(h.max(0))) as f32 * sy).ceil() as i32;
+        (x0, y0, x1 - x0, y1 - y0)
+    };
     // Day tint = CLUT rewrite: 3D passes sample tinted palettes; the GB UI
     // layer composites verbatim.
     let tinted: Vec<[u32; 256]> = pak
@@ -465,13 +500,14 @@ pub fn render(list: &DrawList, pak: &Pak, cache: &AtlasCache) -> Frame {
                 colors,
                 horizon_row,
             } => {
-                let hr = (*horizon_row).clamp(0, H as i32) as usize;
+                let hr = ((*horizon_row as f32 * sy).round() as i32).clamp(0, frame.height as i32)
+                    as usize;
                 for (i, &c) in colors.iter().enumerate() {
                     let y0 = hr * i / colors.len();
                     let y1 = hr * (i + 1) / colors.len();
-                    frame.color[y0 * W..y1 * W].fill(c);
+                    frame.color[y0 * frame.width..y1 * frame.width].fill(c);
                 }
-                frame.color[hr * W..].fill(colors[colors.len() - 1]);
+                frame.color[hr * frame.width..].fill(colors[colors.len() - 1]);
             }
 
             Item::ChunkMesh { mesh, .. } | Item::StampMesh { mesh, .. } => {
@@ -568,13 +604,7 @@ pub fn render(list: &DrawList, pak: &Pak, cache: &AtlasCache) -> Frame {
                     )
                 });
                 quad_tris(quad, |t| {
-                    draw_clip_tri(
-                        &mut frame,
-                        t,
-                        Some(&tex),
-                        DepthMode::GreaterNoWrite,
-                        true,
-                    )
+                    draw_clip_tri(&mut frame, t, Some(&tex), DepthMode::GreaterNoWrite, true)
                 });
             }
 
@@ -639,43 +669,49 @@ pub fn render(list: &DrawList, pak: &Pak, cache: &AtlasCache) -> Frame {
                 let cols = (cp.w / TILE_PX as usize).max(1);
                 let tx0 = (*tile as usize % cols) * TILE_PX as usize;
                 let ty0 = (*tile as usize / cols) * TILE_PX as usize;
+                let x = x * sx;
+                let y = y * sy;
+                let w = w * sx;
+                let h = h * sy;
                 let px0 = x.floor().max(0.0) as usize;
-                let px1 = ((x + w).ceil() as usize).min(W);
+                let px1 = ((x + w).ceil() as usize).min(frame.width);
                 let py0 = y.floor().max(0.0) as usize;
-                let py1 = ((y + h).ceil() as usize).min(H);
+                let py1 = ((y + h).ceil() as usize).min(frame.height);
                 for py in py0..py1 {
                     let cyf = py as f32 + 0.5;
-                    if cyf < *y || cyf >= y + h {
+                    if cyf < y || cyf >= y + h {
                         continue;
                     }
-                    let sy = ((cyf - y) / h * TILE_PX as f32) as usize;
-                    let sy = ty0 + sy.min(TILE_PX as usize - 1);
-                    if sy >= cp.h {
+                    let tex_y = ((cyf - y) / h * TILE_PX as f32) as usize;
+                    let tex_y = ty0 + tex_y.min(TILE_PX as usize - 1);
+                    if tex_y >= cp.h {
                         continue;
                     }
                     for px in px0..px1 {
                         let cxf = px as f32 + 0.5;
-                        if cxf < *x || cxf >= x + w {
+                        if cxf < x || cxf >= x + w {
                             continue;
                         }
-                        let sx = ((cxf - x) / w * TILE_PX as f32) as usize;
-                        let sx = tx0 + sx.min(TILE_PX as usize - 1);
-                        if sx >= cp.w {
+                        let tex_x = ((cxf - x) / w * TILE_PX as f32) as usize;
+                        let tex_x = tx0 + tex_x.min(TILE_PX as usize - 1);
+                        if tex_x >= cp.w {
                             continue;
                         }
-                        let c = pal[cp.frames[0][sy * cp.w + sx] as usize];
+                        let c = pal[cp.frames[0][tex_y * cp.w + tex_x] as usize];
                         if (c >> 24) & 0xff < 0x80 {
                             continue;
                         }
-                        frame.color[py * W + px] = 0xff00_0000 | (c & 0x00ff_ffff);
+                        frame.color[py * frame.width + px] = 0xff00_0000 | (c & 0x00ff_ffff);
                     }
                 }
             }
             Item::VideoQuad { x, y, w, h } => {
-                draw_video_placeholder(&mut frame, *x, *y, *w, *h);
+                let (x, y, w, h) = scale_rect(*x, *y, *w, *h);
+                draw_video_placeholder(&mut frame, x, y, w, h);
             }
             Item::OverlayRect { x, y, w, h, abgr } => {
-                draw_overlay_rect(&mut frame, *x, *y, *w, *h, *abgr);
+                let (x, y, w, h) = scale_rect(*x, *y, *w, *h);
+                draw_overlay_rect(&mut frame, x, y, w, h, *abgr);
             }
         }
     }
@@ -720,6 +756,17 @@ mod tests {
         assert_eq!(count_not_background(&f), 240 * 136);
         // Red, opaque, alpha byte 0xff.
         assert_eq!(f.color[136 * W + 240], 0xff00_00ff);
+    }
+
+    #[test]
+    fn physical_size_projects_without_a_logical_intermediate_frame() {
+        let mut f = Frame::with_size(300, 170);
+        let q = ndc_quad(-0.5, -0.5, 0.5, 0.5, 0.0, [255.0, 0.0, 0.0, 255.0]);
+        draw_quad(&mut f, q, None, DepthMode::LessWrite, false);
+        // The half-height edges land on pixel centres at y=42.5/127.5, and
+        // this double-sided raster convention includes both boundary rows.
+        assert_eq!(count_not_background(&f), 150 * 86);
+        assert_eq!(f.color[85 * 300 + 150], 0xff00_00ff);
     }
 
     #[test]
@@ -799,21 +846,21 @@ mod tests {
             solid: Some(ghost_abgr),
         };
         let ghost = ndc_quad(-0.75, -0.5, 0.75, 0.5, 0.5, [255.0; 4]);
-        draw_quad(
-            &mut f,
-            ghost,
-            Some(&tex),
-            DepthMode::GreaterNoWrite,
-            true,
-        );
+        draw_quad(&mut f, ghost, Some(&tex), DepthMode::GreaterNoWrite, true);
 
         let left = f.color[136 * W + 150];
         let middle = f.color[136 * W + 240];
         let right = f.color[136 * W + 330];
         assert_eq!(left, 0xff40_4040, "transparent card texels stay invisible");
-        assert_eq!(middle, right, "source sprite colors flatten to one silhouette");
+        assert_eq!(
+            middle, right,
+            "source sprite colors flatten to one silhouette"
+        );
         assert_ne!(middle, 0xff40_4040, "opaque sprite texels reveal the ghost");
-        assert!(f.depth[136 * W + 240] < 0.5, "ghost never replaces occluder depth");
+        assert!(
+            f.depth[136 * W + 240] < 0.5,
+            "ghost never replaces occluder depth"
+        );
     }
 
     #[test]

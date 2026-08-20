@@ -9,7 +9,15 @@
 // (voxelmon/SCHEMA.md); anything missing prints a reason and exits
 // without failing into a half-decoded state.
 
-import { existsSync, linkSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 
 import { packageVitaVpk } from "../vendor/pocketjs/tools/vita-package.ts";
 import { missingInputReason, resolveEnv } from "../voxelmon/import/env.ts";
@@ -41,6 +49,9 @@ commands:
             the pak (extra args pass to cargo vita, e.g. --release);
             --tier <psp|vita|desktop> names the quality rung the build asks
             the core for (default vita)
+  cardputer import-if-missing + cook + bundle + aarch64 Linux build for the
+            Cardputer Zero; --install deploys it through adb and refreshes
+            APPLaunch
 
 env: VOXELMON_ROM (canonical US Red), VOXELMON_G1R (~/code/gen1recomp),
      VOXELMON_VOXELMOD (~/code/DramaticShapeVoxelMod), VITASDK`;
@@ -112,6 +123,15 @@ async function preparePakAndTrace(): Promise<number> {
     if (rc !== 0) return rc;
   }
   return 0;
+}
+
+/** Import when needed, then always recook the ROM-derived runtime pak. */
+async function preparePak(): Promise<number> {
+  if (!(await Bun.file(`${ROOT}dist/voxelmon/gen/maps.json`).exists())) {
+    const rc = await run(["bun", "tools/voxel.ts", "import"]);
+    if (rc !== 0) return rc;
+  }
+  return await run(["bun", "voxelmon/cook/cli.ts"]);
 }
 
 async function rasterize(tape: string, tier: string, extra: string[]): Promise<number> {
@@ -410,6 +430,111 @@ async function buildVpk(cargoArgs: string[], tier: string): Promise<number> {
   return 0;
 }
 
+const CARDPUTER_TARGET = "aarch64-unknown-linux-gnu.2.36";
+const CARDPUTER_TARGET_DIR = "aarch64-unknown-linux-gnu";
+
+/** Build and optionally install the native Cardputer Zero host. */
+async function buildCardputer(install: boolean): Promise<number> {
+  const home = process.env.HOME ?? "";
+  const rustupCargo = `${home}/.cargo/bin/cargo`;
+  if (!home || !existsSync(rustupCargo)) {
+    console.error("voxel cardputer: rustup cargo not found under ~/.cargo/bin");
+    return 1;
+  }
+  if (!Bun.which("cargo-zigbuild") && !existsSync(`${home}/.cargo/bin/cargo-zigbuild`)) {
+    console.error("voxel cardputer: cargo-zigbuild is required (cargo install cargo-zigbuild)");
+    return 1;
+  }
+  const env = {
+    ...process.env,
+    // Keep rustup's cargo/rustc shims ahead of Homebrew Rust. The target
+    // stdlib belongs to the rustup toolchain (`rustup target add ...`).
+    PATH: `${home}/.cargo/bin:${process.env.PATH ?? ""}`,
+  };
+  console.log(`voxel cardputer: cargo zigbuild --target ${CARDPUTER_TARGET}`);
+  const built = await run(
+    [
+      rustupCargo,
+      "+stable",
+      "zigbuild",
+      "-p",
+      "pocketvoxel-cardputer",
+      "--release",
+      "--target",
+      CARDPUTER_TARGET,
+    ],
+    ROOT,
+    env,
+  );
+  if (built !== 0) return built;
+
+  const source = `${ROOT}target/${CARDPUTER_TARGET_DIR}/release/pocketvoxel-cardputer`;
+  if (!existsSync(source)) {
+    console.error(`voxel cardputer: no binary at ${source}`);
+    return 1;
+  }
+  const out = `${ROOT}dist/cardputer`;
+  rmSync(out, { recursive: true, force: true });
+  mkdirSync(out, { recursive: true });
+  copyFileSync(source, `${out}/pocketvoxel-cardputer`);
+  chmodSync(`${out}/pocketvoxel-cardputer`, 0o755);
+  copyFileSync(`${ROOT}${GAME_JS}`, `${out}/game.js`);
+  copyFileSync(`${ROOT}${PAK}`, `${out}/voxelmon.vxpak`);
+  copyFileSync(
+    `${ROOT}crates/pocketvoxel-cardputer/assets/pocket-voxel.desktop`,
+    `${out}/pocket-voxel.desktop`,
+  );
+  copyFileSync(
+    `${ROOT}crates/pocketvoxel-cardputer/assets/pocket-voxel.png`,
+    `${out}/pocket-voxel.png`,
+  );
+  console.log(`voxel cardputer: ${out}`);
+  if (!install) return 0;
+
+  const adb = Bun.which("adb");
+  if (!adb) {
+    console.error("voxel cardputer: adb not found");
+    return 1;
+  }
+  const probe = Bun.spawnSync(
+    [
+      adb,
+      "shell",
+      "cat /sys/class/graphics/fb0/virtual_size; cat /sys/class/graphics/fb0/bits_per_pixel; uname -m",
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  const identity = probe.stdout.toString().trim().split(/\s+/);
+  if (probe.exitCode !== 0 || identity.join(" ") !== "320,170 16 aarch64") {
+    console.error(
+      `voxel cardputer: connected target is not the 320x170 RGB565 aarch64 device (${identity.join(" ") || "no response"})`,
+    );
+    return 1;
+  }
+  const remote = "/tmp/pocket-voxel-install";
+  let rc = await run([adb, "shell", `rm -rf ${remote} && mkdir -p ${remote}`]);
+  if (rc !== 0) return rc;
+  rc = await run([adb, "push", `${out}/.`, `${remote}/`]);
+  if (rc !== 0) return rc;
+  rc = await run([
+    adb,
+    "shell",
+    [
+      "install -d -m 755 /usr/share/pocket-voxel",
+      `install -m 755 ${remote}/pocketvoxel-cardputer /usr/share/pocket-voxel/pocketvoxel-cardputer`,
+      `install -m 644 ${remote}/game.js /usr/share/pocket-voxel/game.js`,
+      `install -m 644 ${remote}/voxelmon.vxpak /usr/share/pocket-voxel/voxelmon.vxpak`,
+      `install -m 644 ${remote}/pocket-voxel.desktop /usr/share/APPLaunch/applications/pocket-voxel.desktop`,
+      `install -m 644 ${remote}/pocket-voxel.png /usr/share/APPLaunch/share/images/pocket-voxel.png`,
+      "runuser -u pi -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart APPLaunch.service",
+      `rm -rf ${remote}`,
+    ].join(" && "),
+  ]);
+  if (rc !== 0) return rc;
+  console.log("voxel cardputer: installed; Pocket Voxel is available in APPLaunch");
+  return 0;
+}
+
 /**
  * A PARAM.SFO: the exact layout cargo-psp's mksfo writes (20-byte header,
  * 16-byte index entries, key blob, 4-aligned value blob), keys pre-sorted
@@ -531,6 +656,18 @@ async function main(): Promise<number> {
     const bundle = await bundleGuest();
     if (bundle !== 0) return bundle;
     return await buildVpk(cargoArgs, tier);
+  }
+  if (command === "cardputer") {
+    const unexpected = process.argv.slice(3).filter((value) => value !== "--install");
+    if (unexpected.length > 0) {
+      console.error(`voxel cardputer: unknown arguments ${unexpected.join(" ")}`);
+      return 1;
+    }
+    const prep = await preparePak();
+    if (prep !== 0) return prep;
+    const bundle = await bundleGuest();
+    if (bundle !== 0) return bundle;
+    return await buildCardputer(process.argv.includes("--install"));
   }
   if (command === "wav") {
     return await run(["bun", "voxelmon/game/audio/wav.ts", ...process.argv.slice(3)]);

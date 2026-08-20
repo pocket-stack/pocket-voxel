@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Pocket Voxel
+Comment=Voxel creature RPG for Cardputer Zero
+Exec=/usr/share/pocket-voxel/pocketvoxel-cardputer
+Terminal=false
+Icon=share/images/pocket-voxel.png
+Type=Application
