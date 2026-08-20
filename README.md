@@ -215,8 +215,11 @@ VOXELMON_ROM=/path/to/PokemonRed.gb bun run cardputer:install
 
 Use the arrow keys or `WASD` to move. `Enter`, `Space`, `Z`, or `J` confirms;
 `Backspace`, `X`, or `K` cancels; `P` is Start, `O`/`Q` is Select, and `Esc`
-returns to APPLaunch. The host preserves 60 Hz game logic, presents at 30 fps,
-and sends the core's 11.025 kHz stereo output through PipeWire.
+returns to APPLaunch. **The SPI panel exposes a fixed 320×170 at 30 Hz DRM
+mode**, so the host preserves 60 Hz game logic and presents at the panel-native
+30 fps. The BCM2837 VC4/V3D GPU is a separate DRM device from this SPI display;
+the current host rasterizes on the CPU and writes RGB565 frames to the panel.
+The core and PipeWire stream both run at 11.025 kHz stereo.
 
 ## Tests
 

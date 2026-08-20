@@ -6,6 +6,16 @@
 
 use std::collections::BTreeSet;
 
+use pocketvoxel_core::scene::Scene;
+
+/// The chip synth and PipeWire stream share this source rate.
+pub const AUDIO_RATE: u32 = 11_025;
+
+/// Configure the core before the guest emits any audio operations.
+pub fn configure_audio(scene: &mut Scene) -> bool {
+    scene.audio.set_rate(AUDIO_RATE)
+}
+
 /// A centered, aspect-preserving fit from a logical frame into a panel.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScalePlan {
@@ -210,5 +220,13 @@ mod tests {
         assert_eq!(keys.mask(), btn::A);
         keys.event(KEY_ESC, 1);
         assert!(keys.quit_requested());
+    }
+
+    #[test]
+    fn cardputer_audio_clock_matches_the_pipewire_stream() {
+        let mut scene = Scene::new();
+        assert_eq!(scene.audio.rate(), 44_100);
+        assert!(configure_audio(&mut scene));
+        assert_eq!(scene.audio.rate(), AUDIO_RATE);
     }
 }

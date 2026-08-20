@@ -10,12 +10,12 @@ fn main() -> anyhow::Result<()> {
 
     use anyhow::{Context, bail};
     use pocket_mod::Guest;
+    use pocketvoxel_cardputer::{AUDIO_RATE, configure_audio};
     use pocketvoxel_core::draw;
     use pocketvoxel_core::pak::{self, AlignedBlob};
     use pocketvoxel_core::spec::{TICK_HZ, VIEW_H, VIEW_W};
     use pocketvoxel_sim::raster;
 
-    const AUDIO_RATE: u32 = 11_025;
     const TICKS_PER_PRESENT: u32 = 2;
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -79,6 +79,9 @@ fn main() -> anyhow::Result<()> {
 
     let guest = Guest::new()?;
     let host = surface::mount(&guest, pak.game, pak.audio)?;
+    if !configure_audio(&mut host.scene.borrow_mut()) {
+        bail!("unsupported audio rate {AUDIO_RATE}");
+    }
     guest.eval("voxelmon", &bundle)?;
     if !guest.has_frame() {
         bail!("game bundle installed no frame() function");
@@ -107,6 +110,8 @@ fn main() -> anyhow::Result<()> {
     let mut tick = 0u32;
     let mut render_sum = Duration::ZERO;
     let mut render_max = Duration::ZERO;
+    let mut raster_sum = Duration::ZERO;
+    let mut present_sum = Duration::ZERO;
     let mut render_count = 0u32;
 
     loop {
@@ -147,24 +152,32 @@ fn main() -> anyhow::Result<()> {
 
         if tick.is_multiple_of(TICKS_PER_PRESENT) {
             let started = Instant::now();
+            let raster_started = Instant::now();
             let frame = {
                 let scene = host.scene.borrow();
                 let list = draw::build(&scene, &pak);
                 raster::render_at(&list, &pak, &cache, fit.draw_w, fit.draw_h)
             };
+            raster_sum += raster_started.elapsed();
+            let present_started = Instant::now();
             framebuffer.present(&frame.color)?;
+            present_sum += present_started.elapsed();
             let elapsed = started.elapsed();
             render_sum += elapsed;
             render_max = render_max.max(elapsed);
             render_count += 1;
             if render_count == 60 {
                 log::info!(
-                    "cardputer: render mean {:.1} ms, max {:.1} ms",
+                    "cardputer: frame mean {:.1} ms (raster {:.1} + present {:.1}), max {:.1} ms",
                     render_sum.as_secs_f64() * 1000.0 / render_count as f64,
+                    raster_sum.as_secs_f64() * 1000.0 / render_count as f64,
+                    present_sum.as_secs_f64() * 1000.0 / render_count as f64,
                     render_max.as_secs_f64() * 1000.0,
                 );
                 render_sum = Duration::ZERO;
                 render_max = Duration::ZERO;
+                raster_sum = Duration::ZERO;
+                present_sum = Duration::ZERO;
                 render_count = 0;
             }
         }
