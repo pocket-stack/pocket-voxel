@@ -197,6 +197,43 @@ billboards blend instead of clipping, and give up their baked ambient
 occlusion to do it. Solid geometry and the Game Boy UI layer are unaffected —
 [docs/VOXEL.md §12](docs/VOXEL.md) has the per-pass accounting.
 
+### Cardputer Zero
+
+The native Cardputer Zero host targets its internal **320×170 RGB565** LCD
+and TCA8418 keyboard. Pocket Voxel keeps the **480×272 logical viewport** and
+renders directly at **300×170**, centered with 10-pixel black bars on both
+sides; the image is not stretched or cropped.
+
+Install the Rust target and cross-linker once, connect the device over ADB,
+then give VC4 a 64 MiB contiguous-memory pool once. The stock Cardputer Zero
+image uses 32 MiB, which cannot hold VC4's binner and the renderer's buffer
+objects at the same time:
+
+```sh
+adb shell "cp -p /boot/firmware/cmdline.txt /boot/firmware/cmdline.txt.pre-pocket-voxel-gpu && sed -i 's/cma=[^ ]*/cma=64M/' /boot/firmware/cmdline.txt && systemctl reboot"
+adb wait-for-device
+```
+
+Then build, cook the local ROM-derived pak, and add Pocket Voxel to APPLaunch:
+
+```sh
+rustup target add aarch64-unknown-linux-gnu --toolchain stable
+cargo install cargo-zigbuild
+VOXELMON_ROM=/path/to/PokemonRed.gb bun run cardputer:install
+```
+
+Use the arrow keys or `WASD` to move. `Enter`, `Space`, `Z`, or `J` confirms;
+`Backspace`, `X`, or `K` cancels; `P` is Start, `O`/`Q` is Select, and `Esc`
+returns to APPLaunch. **The SPI panel exposes a fixed 320×170 at 30 Hz DRM
+mode**, so the host preserves 60 Hz game logic and presents at the panel-native
+30 fps. **The host rasterizes geometry, indexed atlas textures, depth, and
+blending on the BCM2837 VC4/V3D GPU through GLES2.** The GPU is a separate DRM
+device from the SPI display, so each 300×170 result is read back and written to
+the RGB565 panel. `--software` selects the CPU rasterizer only for diagnostics;
+the default path rejects Mesa software renderers instead of silently using
+one. **The game clock remains 60 Hz and audio is prebuffered at 11.025 kHz
+stereo, so a skipped display frame does not slow music playback.**
+
 ## Tests
 
 ```sh
