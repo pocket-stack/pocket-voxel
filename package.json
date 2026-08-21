@@ -25,6 +25,7 @@
     "tsc": "bunx tsc --noEmit -p . && bunx tsc --noEmit -p worker/tsconfig.json",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
+    "docs:deploy": "wrangler deploy --config wrangler.docs.jsonc",
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
