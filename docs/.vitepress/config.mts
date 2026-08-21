@@ -1,11 +1,11 @@
 import { withMermaid } from "vitepress-plugin-mermaid";
 
-// Deployed as a GitHub Pages project site; the base must match the repo name.
+// Cloudflare Pages serves the docs from the root of its pages.dev or custom domain.
 export default withMermaid({
   title: "Pocket Voxel",
   description:
     "A Game Boy creature-RPG as a voxelized 3D diorama on a real PSP and PS Vita — one cooked pak, one guest bundle, deterministic to the byte.",
-  base: "/pocket-voxel/",
+  base: "/",
   lastUpdated: true,
 
   head: [
