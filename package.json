@@ -22,12 +22,18 @@
     "web:e2e": "bun web/scripts/e2e-chrome.ts",
     "e2e": "bun tests/e2e/voxel-ppsspp.ts",
     "test": "bun test tests/",
-    "tsc": "bunx tsc --noEmit -p . && bunx tsc --noEmit -p worker/tsconfig.json"
+    "tsc": "bunx tsc --noEmit -p . && bunx tsc --noEmit -p worker/tsconfig.json",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
     "@types/three": "^0.185.0",
+    "mermaid": "^11.16.1",
     "typescript": "^5.7.0",
+    "vitepress": "^1.6.4",
+    "vitepress-plugin-mermaid": "^2.0.17",
     "wrangler": "4.120.1"
   },
   "dependencies": {
